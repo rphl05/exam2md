@@ -21,6 +21,86 @@ REM Diretório base
 set "BASE_DIR=%~dp0"
 cd /d "%BASE_DIR%"
 
+echo Escolha o modo:
+echo   1) Servidor Web (conversao via navegador)
+echo   2) Instalar/Atualizar Nougat OCR (para PDFs escaneados)
+echo   3) Sair
+echo.
+
+:CHOICE
+set /p choice="Escolha (1/2/3): "
+if "%choice%"=="1" goto WEB
+if "%choice%"=="2" goto INSTALL_NOU
+if "%choice%"=="3" goto EXIT
+echo Opcao invalida. Digite 1, 2 ou 3.
+goto CHOICE
+
+:INSTALL_NOU
+echo.
+echo [1/4] Criando ambiente virtual isolado para Nougat...
+if not exist ".venv-nougat" (
+    python -m venv .venv-nougat >nul 2>&1
+    if errorlevel 1 (
+        echo ERRO ao criar ambiente virtual.
+        pause
+        exit /b 1
+    )
+) else (
+    echo .venv-nougat ja existe. Recriando...
+    rmdir /s /q .venv-nougat >nul 2>&1
+    python -m venv .venv-nougat >nul 2>&1
+    if errorlevel 1 (
+        echo ERRO ao criar ambiente virtual.
+        pause
+        exit /b 1
+    )
+)
+
+echo [2/4] Atualizando pip...
+.venv-nougat\Scripts\python.exe -m pip install --upgrade pip >nul 2>&1
+
+echo [3/4] Instalando PyTorch (CPU)...
+echo Isso pode demorar alguns minutos...
+.venv-nougat\Scripts\pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu >nul 2>&1
+if errorlevel 1 (
+    echo ERRO ao instalar PyTorch.
+    pause
+    exit /b 1
+)
+
+echo [4/4] Instalando Nougat OCR (transformers==4.44.2)...
+echo Isso pode demorar alguns minutos...
+.venv-nougat\Scripts\pip install "transformers==4.44.2" nougat-ocr >nul 2>&1
+if errorlevel 1 (
+    echo Tentando versao alternativa (transformers==4.44.0)...
+    .venv-nougat\Scripts\pip install "transformers==4.44.0" nougat-ocr >nul 2>&1
+    if errorlevel 1 (
+        echo ERRO ao instalar Nougat OCR.
+        pause
+        exit /b 1
+    )
+)
+
+echo.
+echo ============================================
+echo  NOUGAT OCR INSTALADO COM SUCESSO!
+echo ============================================
+echo.
+echo Para usar OCR:
+echo   .venv-nougat\Scripts\python.exe reconstruir.py arquivo.pdf --ocr
+echo.
+echo Ou pela web (API):
+echo   1. .venv-nougat\Scripts\python.exe api.py
+echo   2. Use opcao "ocr: true" na API
+echo.
+echo O ambiente fica em: .venv-nougat\
+echo (isolado do pdfplumber, sem conflitos)
+echo.
+pause
+goto EXIT
+
+:WEB
+echo.
 echo [1/3] Verificando Python...
 where python >nul 2>nul
 if errorlevel 1 (
@@ -80,3 +160,6 @@ REM Inicia servidor (bloqueia)
 
 REM Pausa se houver erro
 if errorlevel 1 pause
+
+:EXIT
+exit /b 0
