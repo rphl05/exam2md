@@ -594,6 +594,103 @@ def processar_pagina(pagina, pasta_imagens: Optional[Path] = None) -> tuple:
     return texto, imagens
 
 
+
+def converter_hibrido(
+    pdf_path: Path,
+    output_path: Path,
+    paginas: Optional[List[int]] = None,
+    pasta_imagens: Optional[Path] = None,
+) -> int:
+    """
+    Conversão híbrida: pdfplumber para texto/vetores + pix2tex para fórmulas bitmap.
+    Detecta regiões de fórmula bitmap (imagens) e usa pix2tex para OCR seletivo.
+    """
+    try:
+        from pix2tex.cli import LatexOCR
+    except ImportError:
+        print("Erro: pix2tex não instalado. Execute: pip install pix2tex", file=sys.stderr)
+        return 0
+
+    print("Carregando modelo pix2tex...")
+    modelo = LatexOCR()
+
+    pedacos = []
+    todas_imagens = []
+
+    with pdf_open(str(pdf_path)) as pdf:
+        alvos = paginas if paginas is not None else range(len(pdf.pages))
+        for indice in alvos:
+            pagina = pdf.pages[indice]
+            
+            # 1. Processa com pdfplumber (texto/vetores)
+            texto, imagens = processar_pagina(pagina, None)  # sem pasta_imagens para não duplicar
+            
+            # 2. Detecta regiões de fórmula bitmap (imagens na página)
+            formula_regioes = detectar_formulas_bitmap(pagina)
+            
+            # 3. Para cada região, extrai imagem e roda pix2tex
+            for regiao in formula_regioes:
+                try:
+                    # Extrai a região como imagem
+                    regiao_img = extrair_regiao_como_imagem(pagina, regiao)
+                    if regiao_img:
+                        # Roda pix2tex
+                        latex = modelo(regiao_img).strip()
+                        if latex:
+                            # Substitui a região no texto por LaTeX
+                            # (simplificado: adiciona no final do texto da página)
+                            texto += f"\n\n$${latex}$$"
+                except Exception as e:
+                    print(f"  Aviso: falha ao processar fórmula bitmap: {e}")
+
+            pedacos.append(f"<!-- pagina {indice + 1} -->\n{texto}")
+            todas_imagens.extend(imagens)
+
+    output_path.write_text("\n\n".join(pedacos), encoding="utf-8")
+    return len(output_path.read_text(encoding="utf-8"))
+
+
+def extrair_regiao_como_imagem(pagina, regiao):
+    """Extrai uma região da página como imagem PIL para OCR."""
+    try:
+        bbox = regiao['bbox']
+        # Cria crop da página
+        crop = pagina.crop(bbox)
+        img = crop.to_image(resolution=300)
+        return img.original
+    except Exception:
+        return None
+
+
+def detectar_formulas_bitmap(pagina):
+    """
+    Detecta regiões que parecem fórmulas bitmap (imagens matemáticas).
+    Retorna lista de dicts com 'bbox' (x0, y0, x1, y1) e metadados.
+    """
+    regioes = []
+    
+    # Procura por imagens na página que parecem fórmulas
+    for img in pagina.images:
+        # Filtra: imagens pequenas a médias, não decorativas
+        largura = img.get('width', 0)
+        altura = img.get('height', 0)
+        
+        # Heurística: fórmulas costumam ser imagens pequenas/médias
+        if 20 <= largura <= 400 and 20 <= altura <= 200:
+            # Verifica se não é decorativa (muito pequena ou muito grande)
+            area = largura * altura
+            if 400 <= area <= 50000:
+                regioes.append({
+                    'bbox': (img['x0'], img['top'], img['x1'], img['bottom']),
+                    'x0': img['x0'],
+                    'y0': img['top'],
+                    'x1': img['x1'],
+                    'y1': img['bottom'],
+                })
+    
+    return regioes
+
+
 def converter_pdf(
     pdf_path: Path,
     output_path: Path,
@@ -651,6 +748,7 @@ def main() -> int:
     parser.add_argument("-o", "--output", type=Path, help="Arquivo Markdown de saída (padrão: mesmo nome do PDF com .md)")
     parser.add_argument("--pages", help="Páginas 1-based, ex.: 1,2,3 ou 5-10")
     parser.add_argument("--ocr", action="store_true", help="Usa Nougat OCR (para PDFs escaneados)")
+    parser.add_argument("--hybrid", action="store_true", help="Modo híbrido: pdfplumber + pix2tex para fórmulas bitmap")
     parser.add_argument("--save-images", action="store_true", help="Extrai imagens do PDF para pasta ao lado")
     parser.add_argument("--images-dir", type=Path, help="Pasta personalizada para imagens (padrão: <pdf>_images/)")
     args = parser.parse_args()
@@ -686,6 +784,8 @@ def main() -> int:
 
     if args.ocr:
         chars = converter_com_nougat(pdf_path, output_path, paginas)
+    elif args.hybrid:
+        chars = converter_hibrido(pdf_path, output_path, paginas, pasta_imagens)
     else:
         chars = converter_pdf(pdf_path, output_path, paginas, pasta_imagens)
     
