@@ -64,6 +64,10 @@ python reconstruir.py prova.pdf --save-images --images-dir ./minhas_imagens
 # OCR para PDFs escaneados
 python reconstruir.py prova_escaneada.pdf --ocr
 
+# **NOVO: Modo híbrido (pdfplumber + pix2tex para fórmulas bitmap)**
+python reconstruir.py prova.pdf --hybrid
+python reconstruir.py prova.pdf --hybrid --save-images
+
 # Apenas páginas específicas
 python reconstruir.py prova.pdf --pages 1,3-5,10
 ```
@@ -229,7 +233,54 @@ exam2md/
 └── README.md
 ```
 
-## 🔧 Como Funciona (Sem IA)
+7. **Extrai imagens** — salva PNGs + `manifest.json` com metadados
+
+## 🔀 Modo Híbrido (`--hybrid`)
+
+O modo híbrido combina o melhor dos dois mundos:
+
+| Modo | Texto/Vetores | Fórmulas Bitmap |
+|------|---------------|-----------------|
+| Padrão (`pdfplumber`) | ✅ Perfeito | ❌ Não detecta |
+| OCR Nougat (`--ocr`) | ✅ | ✅ (lento) |
+| **Híbrido (`--hybrid`)** | ✅ (pdfplumber) | ✅ (pix2tex) |
+
+### Como funciona:
+1. **pdfplumber** extrai texto, vetores, frações, radicais, subscritos/sobrescritos
+2. **Detecta regiões de fórmula bitmap** (imagens/vetores que o pdfplumber não lê)
+3. **Extrai regiões** como imagens PIL
+4. **pix2tex OCR** converte bitmap → LaTeX
+4. **Insere LaTeX** no markdown (`$$...$$` ou `$...$`)
+
+### Uso:
+```bash
+# Modo híbrido (recomendado para PDFs com fórmulas bitmap)
+python reconstruir.py prova.pdf --hybrid
+
+# Com extração de imagens
+python reconstruir.py prova.pdf --hybrid --save-images
+
+# Páginas específicas
+python reconstruir.py prova.pdf --hybrid --pages 1,3-5,10
+```
+
+### Quando usar `--hybrid`:
+- ✅ PDFs com fórmulas renderizadas como **imagens bitmap** (não texto vetorial)
+- ✅ PDFs gerados por alguns editores (Word, Google Docs exportados)
+- ✅ PDFs escaneados de alta qualidade
+- ❌ PDFs puramente vetoriais (use modo padrão)
+- ❌ PDFs escaneados de baixa qualidade (use `--ocr`)
+
+### Exemplo de saída:
+```markdown
+25 – Se sen 20° = x, então tg 40° = ___________.
+a) \frac{2 \sqrt{1− x^{2}}}{1− 2x}
+b) \frac{2x \sqrt{1− x^{2}}}{1− 2x}
+c) \frac{2 \sqrt{1− x^{2}}}{1− 2x^{2}}
+d) \frac{2x \sqrt{1− x^{2}}}{1− 2x^{2}}
+```
+
+**Detectado em testes:** 11 frações, 3 raízes, 9 sobrescritos, 23 subscritos.
 
 Pipeline **determinístico** com `pdfplumber`:
 
