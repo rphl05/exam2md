@@ -20,6 +20,7 @@ Requisitos Nougat: pip install nougat-ocr (requer transformers 4.x, torch)
 import argparse
 import sys
 import shutil
+import re
 from pathlib import Path
 from typing import Optional, List
 
@@ -31,6 +32,20 @@ SIMBOLOS = {
     0xF03D: "=", 0xF0B7: "·",
     0xF0E6: "⎛", 0xF0E7: "⎜", 0xF0E8: "⎝",
     0xF0F6: "⎞", 0xF0F7: "⎟", 0xF0F8: "⎠",
+    # Bullet points and common special chars
+    0x2022: "•",  # bullet
+    0x2023: "‣",  # triangular bullet
+    0x25CF: "●",  # black circle
+    0x25CB: "○",  # white circle
+    0x25A0: "■",  # black square
+    0x25A1: "□",  # white square
+    0x2013: "–",  # en dash
+    0x2014: "—",  # em dash
+    0x2018: "'",  # left single quote
+    0x2019: "'",  # right single quote
+    0x201C: "\"", # left double quote
+    0x201D: "\"", # right double quote
+    0x2026: "...", # ellipsis
 }
 ABRE_COLCHETE = "⎛⎜⎝"
 FECHA_COLCHETE = "⎞⎟⎠"
@@ -229,9 +244,15 @@ def achar_fracoes(pagina, chars):
 
 
 def juntar_numeros_de_questao(linhas):
+    """Junta número da questão com enunciado.
+    Suporta formatos:
+    - CFS/EEAR: "1 – Enunciado"
+    - Vunesp: "01. Enunciado" (com zeros à esquerda)
+    """
     saida = []
     i = 0
     while i < len(linhas):
+        # Formato CFS/EEAR: "N – Enunciado"
         if (
             i + 1 < len(linhas)
             and linhas[i].isdigit()
@@ -239,6 +260,19 @@ def juntar_numeros_de_questao(linhas):
             and linhas[i + 1].startswith("–")
         ):
             saida.append(f"{linhas[i]} {linhas[i + 1]}")
+            i += 2
+            continue
+        # Formato Vunesp: "NN. Enunciado" (ex: 01. 02. 03.)
+        # Deve estar no início da linha, seguido de espaço e texto (não data/valor monetário)
+        linha_atual = linhas[i].strip()
+        if (
+            re.match(r'^\d{2}\.$', linha_atual)
+            and i + 1 < len(linhas)
+            # Próxima linha não deve ser continuação de data/valor (ex: "01.2021" ou "40.000")
+            and not re.match(r'^\d{2}\.\d', linhas[i + 1].strip())
+            and not re.match(r'^\d{3}', linhas[i + 1].strip())
+        ):
+            saida.append(f"{linha_atual} {linhas[i + 1].strip()}")
             i += 2
             continue
         saida.append(linhas[i])
@@ -512,11 +546,47 @@ def processar_pagina(pagina, pasta_imagens: Optional[Path] = None) -> tuple:
 
     texto = "\n".join(resultado).strip()
     
+    # Pós-processamento conservador: apenas corrige hifenização óbvia
+    import re
+    
+    # 1. Corrige hifenização quebrada (palavras quebradas com hífen no final da linha)
+    # "apli-\ncado" -> "aplicado"
+    texto = re.sub(r'(\w)-\s*\n\s*(\w)', r'\1\2', texto)
+    
+    # 2. Corrige palavras quebradas por espaço/quebra sem hífen (ex: "d ificuldades")
+    # Padrão: letra no final da linha + quebra + letra minúscula no início da próxima
+    # Apenas se a linha anterior NÃO termina com pontuação e a próxima começa com minúscula
+    linhas = texto.split('\n')
+    for i in range(len(linhas) - 1):
+        atual = linhas[i].rstrip()
+        prox = linhas[i + 1].lstrip()
+        if (atual and prox and 
+            not re.search(r'[.!?;:]\s*$', atual) and
+            prox and prox[0].islower() and
+            # Não juntar se linha atual parece número de questão
+            not re.match(r'^\d{1,2}[.–]\s', atual) and
+            # Não juntar se próxima linha parece alternativa
+            not re.match(r'^\(?[A-E]\)?', prox.lstrip())):
+            linhas[i] = atual + ' ' + prox.lstrip()
+            linhas[i + 1] = ''
+    texto = '\n'.join(l for l in linhas if l)
+    
+    # 2. Corrige hifenização quebrada (palavras quebradas com hífen no final da linha)
+    texto = re.sub(r'(\w)-\s*\n\s*(\w)', r'\1\2', texto)
+    
+    # 3. Corrige palavras quebradas por espaço/quebra sem hífen
+    texto = re.sub(r'(\w)\s*\n\s+([a-z])', r'\1\2', texto)
+    
+    # 4. Corrige espaços duplos
+    texto = re.sub(r' {2,}', ' ', texto)
+    
+    # 5. Remove caracteres de substituição (U+FFFD) se houver
+    texto = texto.replace('\ufffd', '')
+    
     # Extrai imagens se pasta informada
     imagens = []
     if pasta_imagens:
         imagens = extrair_imagens(pagina, pasta_imagens, f"page{pagina.page_number}")
-        # Adiciona referências de imagem no markdown se houver imagens
         if imagens:
             refs = "\n\n".join(f"![Imagem página {img['pagina']}]({img['arquivo']})" for img in imagens)
             texto = f"{texto}\n\n{refs}" if texto else refs
