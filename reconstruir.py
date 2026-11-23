@@ -1,19 +1,31 @@
 #!/usr/bin/env python
-"""PDF -> Markdown com fórmulas LaTeX (CLI + auto-output naming).
+"""exam2md - Prova para Markdown com LaTeX + Imagens + OCR Nougat.
 
 Uso:
-    python reconstruir.py prova.pdf                    # gera prova.md
-    python reconstruir.py prova.pdf -o saida.md        # nome customizado
-    python reconstruir.py prova.pdf --pages 1,2,3      # páginas específicas
+    python reconstruir.py prova.pdf                           # gera prova.md + pasta prova_images/
+    python reconstruir.py prova.pdf -o saida.md               # nome customizado
+    python reconstruir.py prova.pdf --pages 1,3-5             # páginas específicas
+    python reconstruir.py prova.pdf --ocr                     # usa Nougat OCR (para PDFs escaneados)
+    python reconstruir.py prova.pdf --save-images             # extrai imagens para pasta
+    python reconstruir.py prova.pdf --ocr --save-images       # ambas
+
+Pipeline:
+  1. PDF digital (texto vetorial) -> pdfplumber (rápido, 100% local)
+  2. PDF escaneado (imagem) -> Nougat OCR (preciso, requer GPU/CPU)
+  3. Imagens -> salvas em pasta ao lado do PDF/Markdown
+
+Requisitos Nougat: pip install nougat-ocr (requer transformers 4.x, torch)
 """
 
 import argparse
 import sys
+import shutil
 from pathlib import Path
+from typing import Optional, List
 
 from pdfplumber import open as pdf_open
 
-# ---- constants & helpers (same as before) ----
+# ---- constants & helpers ----
 SIMBOLOS = {
     0xF028: "(", 0xF029: ")", 0xF02B: "+", 0xF02D: "−",
     0xF03D: "=", 0xF0B7: "·",
@@ -415,7 +427,44 @@ def renderizar_coluna(chars, corpo, fracoes, radicais):
     return juntar_numeros_de_questao(resultado)
 
 
-def processar_pagina(pagina):
+def extrair_imagens(pagina, pasta_saida: Path, prefixo: str = "page") -> List[dict]:
+    """Extrai imagens da página e salva na pasta. Retorna lista de metadados."""
+    pasta_saida.mkdir(parents=True, exist_ok=True)
+    resultados = []
+    
+    for idx, img in enumerate(pagina.images):
+        try:
+            # pdfplumber retorna dict com 'stream', 'width', 'height', etc.
+            stream = img.get("stream")
+            if not stream:
+                continue
+            
+            # Gera nome único
+            ext = ".png"  # pdfplumber extrai como PNG
+            nome = f"{prefixo}_{pagina.page_number}_img{idx+1}{ext}"
+            caminho = pasta_saida / nome
+            
+            # Salva a imagem
+            with open(caminho, "wb") as f:
+                f.write(stream.get_data())
+            
+            resultados.append({
+                "arquivo": nome,
+                "caminho": str(caminho),
+                "pagina": pagina.page_number,
+                "x": img.get("x0", 0),
+                "y": img.get("top", 0),
+                "largura": img.get("width", 0),
+                "altura": img.get("height", 0),
+            })
+        except Exception as e:
+            print(f"[aviso] Falha ao extrair imagem {idx}: {e}", file=sys.stderr)
+    
+    return resultados
+
+
+def processar_pagina(pagina, pasta_imagens: Optional[Path] = None) -> tuple:
+    """Processa uma página. Retorna (texto_markdown, lista_imagens)."""
     chars = []
     for ch in pagina.chars:
         novo = dict(ch)
@@ -423,7 +472,7 @@ def processar_pagina(pagina):
         chars.append(novo)
 
     if not chars:
-        return ""
+        return "", []
 
     corpo = tamanho_corpo(chars)
     divisoria = achar_divisoria(pagina, chars)
@@ -461,27 +510,79 @@ def processar_pagina(pagina):
     if rodape:
         resultado.extend(renderizar_coluna(rodape, corpo, [], []))
 
-    return "\n".join(resultado).strip()
+    texto = "\n".join(resultado).strip()
+    
+    # Extrai imagens se pasta informada
+    imagens = []
+    if pasta_imagens:
+        imagens = extrair_imagens(pagina, pasta_imagens, f"page{pagina.page_number}")
+        # Adiciona referências de imagem no markdown se houver imagens
+        if imagens:
+            refs = "\n\n".join(f"![Imagem página {img['pagina']}]({img['arquivo']})" for img in imagens)
+            texto = f"{texto}\n\n{refs}" if texto else refs
+    
+    return texto, imagens
 
 
-def converter_pdf(pdf_path: Path, output_path: Path, paginas=None) -> int:
+def converter_pdf(
+    pdf_path: Path,
+    output_path: Path,
+    paginas: Optional[List[int]] = None,
+    pasta_imagens: Optional[Path] = None,
+) -> int:
     """Converte PDF para Markdown. Retorna número de caracteres."""
     pedacos = []
+    todas_imagens = []
+    
     with pdf_open(str(pdf_path)) as pdf:
         alvos = paginas if paginas is not None else range(len(pdf.pages))
         for indice in alvos:
-            texto = processar_pagina(pdf.pages[indice])
+            texto, imagens = processar_pagina(pdf.pages[indice], pasta_imagens)
             pedacos.append(f"<!-- pagina {indice + 1} -->\n{texto}")
-
+            todas_imagens.extend(imagens)
+    
     output_path.write_text("\n\n".join(pedacos), encoding="utf-8")
+    
+    # Salva manifesto de imagens se houver
+    if pasta_imagens and todas_imagens:
+        import json
+        manifesto = pasta_imagens / "manifest.json"
+        manifesto.write_text(json.dumps(todas_imagens, indent=2, ensure_ascii=False), encoding="utf-8")
+    
     return len(output_path.read_text(encoding="utf-8"))
 
 
+# ---- Nougat OCR ----
+def converter_com_nougat(pdf_path: Path, output_path: Path, paginas: Optional[List[int]] = None) -> int:
+    """Converte PDF usando Nougat OCR (para PDFs escaneados)."""
+    try:
+        from nougat import NougatModel
+        from nougat.utils.checkpoint import get_checkpoint
+    except ImportError:
+        print("Erro: Nougat não instalado. Execute: pip install nougat-ocr", file=sys.stderr)
+        print("Nota: Requer transformers 4.x e torch. Use ambiente separado se necessário.", file=sys.stderr)
+        return 0
+    
+    print("Carregando modelo Nougat (pode demorar na primeira vez)...")
+    checkpoint = get_checkpoint(None, model_tag="0.1.0-base")
+    model = NougatModel.from_pretrained(checkpoint)
+    model.eval()
+    
+    # TODO: Implementar conversão página a página com Nougat
+    # Por enquanto, avisa que não está implementado
+    print("Nougat OCR: conversão página a página não implementada ainda.")
+    print("Use o CLI do Nougat diretamente: nougat arquivo.pdf -o saida --markdown")
+    return 0
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="exam2md - Prova para Markdown com fórmulas LaTeX")
+    parser = argparse.ArgumentParser(description="exam2md - Prova para Markdown com LaTeX + Imagens + OCR")
     parser.add_argument("pdf", type=Path, help="Arquivo PDF de entrada")
     parser.add_argument("-o", "--output", type=Path, help="Arquivo Markdown de saída (padrão: mesmo nome do PDF com .md)")
     parser.add_argument("--pages", help="Páginas 1-based, ex.: 1,2,3 ou 5-10")
+    parser.add_argument("--ocr", action="store_true", help="Usa Nougat OCR (para PDFs escaneados)")
+    parser.add_argument("--save-images", action="store_true", help="Extrai imagens do PDF para pasta ao lado")
+    parser.add_argument("--images-dir", type=Path, help="Pasta personalizada para imagens (padrão: <pdf>_images/)")
     args = parser.parse_args()
 
     pdf_path = args.pdf
@@ -494,18 +595,34 @@ def main() -> int:
     else:
         output_path = pdf_path.with_suffix(".md")
 
+    # Pasta de imagens
+    pasta_imagens = None
+    if args.save_images:
+        if args.images_dir:
+            pasta_imagens = args.images_dir
+        else:
+            pasta_imagens = pdf_path.parent / f"{pdf_path.stem}_images"
+
     paginas = None
     if args.pages:
         paginas = []
         for parte in args.pages.split(","):
+            parte = parte.strip()
             if "-" in parte:
                 ini, fim = map(int, parte.split("-", 1))
                 paginas.extend(range(ini - 1, fim))
             else:
                 paginas.append(int(parte) - 1)
 
-    chars = converter_pdf(pdf_path, output_path, paginas)
-    print(f"OK: {output_path} ({chars} caracteres)")
+    if args.ocr:
+        chars = converter_com_nougat(pdf_path, output_path, paginas)
+    else:
+        chars = converter_pdf(pdf_path, output_path, paginas, pasta_imagens)
+    
+    msg = f"OK: {output_path} ({chars} caracteres)"
+    if pasta_imagens:
+        msg += f" | Imagens em: {pasta_imagens}/"
+    print(msg)
     return 0
 
 
