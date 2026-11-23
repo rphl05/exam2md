@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Outputs
+*.md
+!README.md
+!*.md.example
+local-ocr/saida_*.md
+local-ocr/*.txt
+
+# Temp
+tmp/
+temp/
+*.tmp
+
+# Logs
+*.log
