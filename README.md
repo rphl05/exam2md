@@ -112,24 +112,100 @@ GET /batch-status/abc12345
 GET /batch-download/abc12345
 ```
 
-## 🖥️ Launchers (Windows)
+## 🖥️ Launchers (Multiplataforma)
 
-| Arquivo | Como Usa |
-|---------|----------|
-| `exam2md_web.bat` | **Duplo clique → abre navegador** (mais simples) |
-| `exam2md_launcher.py` | Duplo clique (compilável `.exe` com pyinstaller) |
-| `exam2md_launcher.bat` | Duplo clique (batch wrapper) |
-| `exam2md.vbs` | Duplo clique (fixável na barra de tarefas) |
-| `exam2md_rapido.bat` | **Arraste PDF em cima** → gera `.md` |
-| `exam2md.bat` | Menu interativo (1=simples, 2=imagens, 3=OCR, 4=Web) |
-| `exam2md_batch.bat` | Menu para processamento em lote |
+| Arquivo | Plataforma | Como Usa |
+|---------|------------|----------|
+| `exam2md_launcher.py` | **Linux, macOS, Windows** | `python exam2md_launcher.py` (compilável `.exe`/binário) |
+| `exam2md_launcher.bat` | Windows | Duplo clique (menu interativo) |
+| `exam2md.vbs` | Windows | Duplo clique (fixável na barra de tarefas) |
+| `exam2md_web.bat` | Windows | **Duplo clique → abre navegador** (mais simples) |
+| `exam2md_rapido.bat` | Windows | **Arraste PDF em cima** → gera `.md` |
+| `exam2md.bat` | Windows | Menu interativo (1=simples, 2=imagens, 3=OCR, 4=Web) |
+| `exam2md_batch.bat` | Windows | Menu para processamento em lote |
+| `install_nougat.py` | **Linux, macOS, Windows** | `python install_nougat.py` (instalador OCR cross-platform) |
+| `install_nougat.bat` | Windows | Duplo clique → instala Nougat OCR |
 
-### Compilar .exe (Distribuição)
+**Linux/macOS:** Use os arquivos `.py` diretamente (`python exam2md_launcher.py`).
+**Windows:** Use `.bat`, `.vbs` ou `.py` — todos funcionam.
+
+### 🐧🍎 Suporte Linux e macOS
+
+A **lógica principal** (`reconstruir.py`, `api.py`, `exam2md_batch.py`, `exam2md_launcher.py`, `install_nougat.py`) é **100% Python puro** e roda em Linux, macOS e Windows.
+
+| Componente | Linux | macOS | Windows |
+|------------|-------|-------|---------|
+| Core (`reconstruir.py`, `api.py`, `exam2md_batch.py`) | ✅ | ✅ | ✅ |
+| API Web (`api.py` + `web/index.html`) | ✅ | ✅ | ✅ |
+| OCR Nougat | ✅ | ✅ (ARM64 nativo M1/M2/M3) | ✅ |
+| Launchers `.bat` | ❌ | ❌ | ✅ |
+| Launchers `.vbs` | ❌ | ❌ | ✅ |
+| Launchers `.py` | ✅ | ✅ | ✅ |
+
+### No Linux / macOS
+
+```bash
+# Instalação
+git clone https://github.com/rphl05/exam2md.git
+cd exam2md
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# CLI direto
+python reconstruir.py prova.pdf --save-images
+
+# Batch
+python exam2md_batch.py *.pdf --save-images
+
+# OCR (requer install_nougat.py antes)
+python reconstruir.py prova.pdf --ocr
+
+# Web
+python api.py  # → http://localhost:8000
+
+# Instalador Nougat (cross-platform)
+python install_nougat.py
+
+# Launcher
+python exam2md_launcher.py
+```
+
+### Build nativo (Linux/macOS)
+```bash
+# Linux
+pyinstaller --onefile --name exam2md exam2md_launcher.py
+
+# macOS (binário)
+pyinstaller --onefile --name exam2md exam2md_launcher.py
+
+# macOS App nativo
+pyinstaller --onefile --windowed --name exam2md exam2md_launcher.py
+```
+
+### Compilar Executáveis (Multiplataforma)
+
 ```bash
 pip install pyinstaller
+
+# Linux (binário ELF)
+pyinstaller --onefile --name exam2md exam2md_launcher.py
+# → dist/exam2md (binário ELF)
+
+# macOS (binário Mach-O)
+pyinstaller --onefile --name exam2md exam2md_launcher.py
+# → dist/exam2md (Mach-O 64-bit)
+
+# macOS (App nativo .app com ícone no Dock)
+pyinstaller --onefile --windowed --name exam2md exam2md_launcher.py
+# → dist/exam2md.app
+
+# Windows (executável .exe)
 pyinstaller --onefile --noconsole exam2md_launcher.py
-# Gera exam2md_launcher.exe (um único arquivo)
+# → dist/exam2md.exe
 ```
+
+**Build automático multi-plataforma:** Use GitHub Actions (`.github/workflows/build.yml`) para gerar Linux, macOS e Windows a cada push.
 
 ## 📂 Estrutura do Projeto
 
