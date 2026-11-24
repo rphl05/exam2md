@@ -129,12 +129,16 @@ goto :exit
 echo.
 echo Iniciando servidor web...
 echo.
-echo Abrindo navegador em http://localhost:8000
+echo Aguardando servidor ficar pronto...
+start "exam2md API" /b .venv\Scripts\python.exe api.py
+timeout /t 3 >nul
+echo Abrindo navegador em http://localhost:8000/web/
+start "" http://localhost:8000/web/
 echo.
-echo Para parar, feche esta janela.
+echo Servidor rodando. Feche esta janela para parar.
 echo.
-start "" http://localhost:8000
-.venv\Scripts\python.exe api.py
+pause
+goto :exit
 
 :exit
 echo.

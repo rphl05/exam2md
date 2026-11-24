@@ -170,5 +170,35 @@ def main():
         input("ERRO: Python não encontrado!\nInstale em: https://python.org/downloads\nMarque 'Add Python to PATH'\n\nPressione Enter para sair...")
         return 1
 
+    # Configura venv e inicia servidor
+    venv_python = setup_venv(Path(base_dir), python_cmd)
+    
+    print("\n[OK] Servidor iniciando em http://localhost:8000")
+    print("Abrindo navegador...")
+    print()
+    print("=" * 50)
+    print("  PRONTO! O navegador vai abrir automaticamente.")
+    print("  Arraste seu PDF na area indicada e clique 'Converter'.")
+    print("=" * 50)
+    print()
+    print("Para parar: pressione Ctrl+C nesta janela.")
+    print("=" * 50)
+    print()
+
+    # Abre navegador após delay
+    open_browser_delayed("http://localhost:8000/web/", delay=2.0)
+    
+    # Inicia servidor (bloqueia)
+    try:
+        subprocess.run([str(venv_python), "api.py"], check=True)
+    except KeyboardInterrupt:
+        print("\nServidor parado.")
+    except subprocess.CalledProcessError as e:
+        print(f"\nERRO ao iniciar servidor: {e}")
+        input("Pressione Enter para sair...")
+        return 1
+
+    return 0
+
 if __name__ == "__main__":
     sys.exit(main())

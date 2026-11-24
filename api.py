@@ -39,7 +39,7 @@ class ConvertResponse(BaseModel):
     success: bool
     filename: str
     chars: int
-    pages: int
+    pages: int | str
     images_count: int = 0
     download_url: str
     images_url: Optional[str] = None
@@ -63,6 +63,8 @@ class BatchStatusResponse(BaseModel):
     current_file: Optional[str] = None
     results: List[ConvertResponse] = []
     error: Optional[str] = None
+
+    model_config = {"arbitrary_types_allowed": True}
 
 
 @app.get("/health")
@@ -108,10 +110,20 @@ async def convert_pdf_endpoint(
             pasta_imagens = tmp_path.parent / f"{tmp_path.stem}_images"
         
         if ocr:
-            chars = converter_com_nougat(tmp_path, tmp_path.with_suffix(".md"), paginas)
+            temp_md_path = tmp_path.with_suffix(".md")
+            chars = converter_com_nougat(tmp_path, temp_md_path, paginas)
+            # Copy/rename to expected output name in same temp dir for download
+            output_md_path = tmp_path.parent / output_name
+            if temp_md_path != output_md_path:
+                shutil.copy2(temp_md_path, output_md_path)
             images_count = 0
         else:
-            chars = converter_pdf(tmp_path, tmp_path.with_suffix(".md"), paginas, pasta_imagens)
+            temp_md_path = tmp_path.with_suffix(".md")
+            chars = converter_pdf(tmp_path, temp_md_path, paginas, pasta_imagens)
+            # Copy/rename to expected output name in same temp dir for download
+            output_md_path = tmp_path.parent / output_name
+            if temp_md_path != output_md_path:
+                shutil.copy2(temp_md_path, output_md_path)
             # Conta imagens se houver
             images_count = 0
             if pasta_imagens and pasta_imagens.exists():
@@ -137,7 +149,7 @@ async def convert_pdf_endpoint(
             zip_path = tmp_path.parent / f"{tmp_path.stem}_complete.zip"
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
                 # Adiciona markdown
-                md_path = tmp_path.with_suffix(".md")
+                md_path = tmp_path.parent / output_name
                 zf.write(md_path, output_name)
                 # Adiciona imagens
                 for img_file in pasta_imagens.glob("*"):
@@ -457,6 +469,13 @@ async def convert_stream(
         media_type="text/markdown",
         headers={"Content-Disposition": f"attachment; filename={Path(file.filename).with_suffix('.md').name}"}
     )
+
+
+# Serve static files from web folder at /web path
+from fastapi.staticfiles import StaticFiles
+web_dir = Path(__file__).parent / "web"
+if web_dir.exists():
+    app.mount("/web", StaticFiles(directory=web_dir, html=True), name="web")
 
 
 if __name__ == "__main__":

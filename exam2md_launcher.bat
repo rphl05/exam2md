@@ -152,14 +152,28 @@ echo Para parar: feche esta janela (Ctrl+C).
 echo ============================================
 echo.
 
-REM Abre navegador após 2 segundos
-start /b cmd /c "timeout /t 2 >nul && start "" http://localhost:8000"
+REM Inicia servidor em background
+start "exam2md API" /b .venv\Scripts\python.exe api.py
 
-REM Inicia servidor (bloqueia)
-.venv\Scripts\python.exe api.py
+REM Aguarda servidor ficar pronto e abre navegador
+echo Aguardando servidor iniciar...
+timeout /t 3 >nul
+start "" http://localhost:8000/web/
 
-REM Pausa se houver erro
-if errorlevel 1 pause
+echo.
+echo ============================================
+echo  PRONTO! O navegador vai abrir automaticamente.
+echo  Arraste seu PDF na area indicada e clique "Converter".
+echo ============================================
+echo.
+echo Para parar: feche esta janela (Ctrl+C).
+echo ============================================
+echo.
+
+REM Aguarda o servidor (o start /b acima roda em background, entao precisamos esperar)
+REM O servidor roda no processo filho, entao este script termina mas o servidor continua
+REM Se quiser manter a janela aberta, descomente a linha abaixo:
+pause
 
 :EXIT
 exit /b 0

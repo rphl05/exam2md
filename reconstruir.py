@@ -64,7 +64,9 @@ def tamanho_corpo(chars):
     return contagem.most_common(1)[0][0]
 
 
-def achar_divisoria(pagina, chars):
+def achar_divisoria(pagina, chars, corpo):
+    """Encontra a divisória vertical entre colunas."""
+    # 1. Tenta encontrar linha vertical explícita
     candidatas = [
         linha for linha in pagina.lines
         if (linha["x1"] - linha["x0"]) < 2 and (linha["bottom"] - linha["top"]) > 200
@@ -73,23 +75,35 @@ def achar_divisoria(pagina, chars):
         melhor = min(candidatas, key=lambda l: abs(l["x0"] - pagina.width / 2))
         return melhor["x0"], melhor["top"], melhor["bottom"]
 
+    # 2. Usa densidade de caracteres (filtrando watermark e headers grandes)
+    # Filtra: remove watermark (topo pequeno, fonte tiny) e headers grandes
+    chars_filtrados = [
+        ch for ch in chars
+        if not (ch["top"] < 50 and ch["size"] < 9)  # watermark
+        and 0.7 * corpo <= ch["size"] <= 1.3 * corpo  # tamanho do corpo
+    ]
+
     faixas = 60
     passo = pagina.width / faixas
     ocupacao = [0] * faixas
-    for ch in chars:
+    for ch in chars_filtrados:
         centro = (ch["x0"] + ch["x1"]) / 2
         indice = min(faixas - 1, max(0, int(centro / passo)))
         ocupacao[indice] += 1
 
+    # Usa threshold em vez de zero exato (permite alguns chars no gutter)
+    max_ocup = max(ocupacao[int(faixas * 0.3):int(faixas * 0.7)]) if any(ocupacao[int(faixas * 0.3):int(faixas * 0.7)]) else 1
+    threshold = max(1, max_ocup * 0.05)  # 5% do máximo
+
     melhor_inicio, melhor_tamanho, atual = None, 0, 0
     for i in range(int(faixas * 0.3), int(faixas * 0.7)):
-        if ocupacao[i] == 0:
+        if ocupacao[i] <= threshold:
             atual += 1
             if atual > melhor_tamanho:
                 melhor_tamanho, melhor_inicio = atual, i - atual + 1
         else:
             atual = 0
-    if melhor_tamanho < 4:
+    if melhor_tamanho < 2:  # gap mínimo de 2 faixas
         return None
     x = (melhor_inicio + melhor_tamanho / 2) * passo
     return x, 0.0, pagina.height
@@ -243,38 +257,87 @@ def achar_fracoes(pagina, chars):
     return fracoes
 
 
+def eh_alternativa(texto: str) -> bool:
+    """Detecta se uma linha é uma alternativa (A), (B), etc."""
+    # Alternativas típicas: (A), (A), A), A., (A., (A., A., etc.
+    # Após a letra, deve vir: espaço + maiúscula, ou pontuação, ou fim de linha
+    # NÃO é alternativa se for palavra normal começando com A-E seguida de minúscula
+    m = re.match(r'^\(?([A-E])\)?[\s\.]', texto)
+    if not m:
+        return False
+    # Verifica o que vem após a letra + espaço/pontuação
+    resto = texto[m.end():].lstrip()
+    if not resto:
+        return True  # linha é só "(A)" ou "A."
+    # Se o próximo caractere é maiúsculo ou pontuação, é alternativa
+    # Se é minúscula, é palavra normal (ex: "A subjetividade...")
+    return resto[0].isupper() or resto[0] in '("\''
+ 
+
 def juntar_numeros_de_questao(linhas):
-    """Junta número da questão com enunciado.
+    """Junta número da questão com enunciado e formata alternativas.
     Suporta formatos:
     - CFS/EEAR: "1 – Enunciado"
     - Vunesp: "01. Enunciado" (com zeros à esquerda)
+    - FGV/outros: número sozinho na linha seguido de enunciado
+    - Alternativas: (A), (B), etc. cada uma em linha separada
     """
     saida = []
     i = 0
     while i < len(linhas):
+        linha = linhas[i].strip()
+        
         # Formato CFS/EEAR: "N – Enunciado"
         if (
             i + 1 < len(linhas)
-            and linhas[i].isdigit()
-            and len(linhas[i]) <= 2
-            and linhas[i + 1].startswith("–")
+            and linha.isdigit()
+            and len(linha) <= 2
+            and linhas[i + 1].strip().startswith("–")
         ):
-            saida.append(f"{linhas[i]} {linhas[i + 1]}")
+            saida.append(f"{linha} {linhas[i + 1].strip()}")
             i += 2
             continue
+        
         # Formato Vunesp: "NN. Enunciado" (ex: 01. 02. 03.)
-        # Deve estar no início da linha, seguido de espaço e texto (não data/valor monetário)
-        linha_atual = linhas[i].strip()
         if (
-            re.match(r'^\d{2}\.$', linha_atual)
+            re.match(r'^\d{2}\.$', linha)
             and i + 1 < len(linhas)
-            # Próxima linha não deve ser continuação de data/valor (ex: "01.2021" ou "40.000")
             and not re.match(r'^\d{2}\.\d', linhas[i + 1].strip())
             and not re.match(r'^\d{3}', linhas[i + 1].strip())
         ):
-            saida.append(f"{linha_atual} {linhas[i + 1].strip()}")
+            saida.append(f"{linha} {linhas[i + 1].strip()}")
             i += 2
             continue
+        
+        # Formato FGV/geral: número da questão sozinho na linha (1-2 dígitos)
+        # seguido de texto que não parece alternativa
+        prox_linha = linhas[i + 1].strip() if i + 1 < len(linhas) else ''
+        eh_alt = eh_alternativa(prox_linha)
+        
+        if (
+            re.match(r'^\d{1,2}$', linha)
+            and i + 1 < len(linhas)
+            and not eh_alt
+        ):
+            # Junta com as próximas linhas até encontrar uma alternativa ou próxima questão
+            enunciado = [linha]
+            i += 1
+            while i < len(linhas):
+                prox = linhas[i].strip()
+                # Para se encontrar próxima questão (número) ou alternativa
+                if re.match(r'^\d{1,2}$', prox) or eh_alternativa(prox):
+                    break
+                enunciado.append(prox)
+                i += 1
+            saida.append(" ".join(enunciado))
+            continue
+        
+        # Alternativas: (A), (B), (C), (D), (E) - cada uma em linha separada
+        if eh_alternativa(linha):
+            saida.append(linha)
+            i += 1
+            continue
+        
         saida.append(linhas[i])
         i += 1
     return saida
@@ -497,19 +560,67 @@ def extrair_imagens(pagina, pasta_saida: Path, prefixo: str = "page") -> List[di
     return resultados
 
 
+def encontrar_inicio_colunas(chars, x_div, corpo, pagina_height):
+    """
+    Detecta onde começa o layout de duas colunas.
+    Procura onde AMBOS os lados têm conteúdo consistente (duas colunas reais).
+    Retorna a coordenada Y onde as colunas começam, ou None se não detectado.
+    """
+    from collections import defaultdict
+    linhas = defaultdict(list)
+    for ch in chars:
+        top_key = round(ch["top"] / 2) * 2
+        linhas[top_key].append(ch)
+    
+    balanco_por_top = []
+    for top, chars_linha in sorted(linhas.items()):
+        left = sum(1 for ch in chars_linha if (ch["x0"] + ch["x1"]) / 2 < x_div)
+        right = sum(1 for ch in chars_linha if (ch["x0"] + ch["x1"]) / 2 >= x_div)
+        total = left + right
+        if total > 5:
+            if left > 0 and right > 0:
+                ratio = min(left, right) / max(left, right)
+            else:
+                ratio = 0
+            balanco_por_top.append((top, ratio, left, right, total))
+    
+    if not balanco_por_top:
+        return None
+    
+    # Procura a primeira linha onde o ratio é bom (>0.3) 
+    # E as próximas linhas também têm ratio razoável na maioria
+    # Permite alguns gaps (linhas de cabeçalho de seção num lado só)
+    
+    for i, (top, ratio, left, right, total) in enumerate(balanco_por_top):
+        if ratio > 0.3 and total > 10:
+            # Verifica as próximas 5 linhas: pelo menos 3 devem ter ratio > 0.3
+            bons = 0
+            for j in range(i, min(i + 6, len(balanco_por_top))):
+                t, r, l, rt, tot = balanco_por_top[j]
+                if r > 0.3 and tot > 10:
+                    bons += 1
+            if bons >= 3:
+                return top
+    
+    return None
+
+
 def processar_pagina(pagina, pasta_imagens: Optional[Path] = None) -> tuple:
     """Processa uma página. Retorna (texto_markdown, lista_imagens)."""
     chars = []
     for ch in pagina.chars:
         novo = dict(ch)
         novo["text"] = normalizar(ch["text"])
+        # Filtra watermark (texto minúsculo no topo da página)
+        if ch["top"] < 50 and ch["size"] < 9:
+            continue
         chars.append(novo)
 
     if not chars:
         return "", []
 
     corpo = tamanho_corpo(chars)
-    divisoria = achar_divisoria(pagina, chars)
+    divisoria = achar_divisoria(pagina, chars, corpo)
 
     if divisoria is None:
         x_div, topo_div, base_div = None, 0.0, pagina.height
@@ -522,10 +633,24 @@ def processar_pagina(pagina, pasta_imagens: Optional[Path] = None) -> tuple:
     if x_div is None:
         blocos = [corpo_pagina]
     else:
-        blocos = [
-            [ch for ch in corpo_pagina if (ch["x0"] + ch["x1"]) / 2 < x_div],
-            [ch for ch in corpo_pagina if (ch["x0"] + ch["x1"]) / 2 >= x_div],
-        ]
+        # Detecta onde começa o layout de duas colunas
+        y_inicio_colunas = encontrar_inicio_colunas(corpo_pagina, x_div, corpo, pagina.height)
+        
+        if y_inicio_colunas is not None:
+            # Divide: acima de y_inicio_colunas = full width, abaixo = duas colunas
+            cabecalho = [ch for ch in corpo_pagina if ch["top"] < y_inicio_colunas]
+            corpo_colunas = [ch for ch in corpo_pagina if ch["top"] >= y_inicio_colunas]
+            
+            blocos = [cabecalho]
+            if corpo_colunas:
+                blocos.append([ch for ch in corpo_colunas if (ch["x0"] + ch["x1"]) / 2 < x_div])
+                blocos.append([ch for ch in corpo_colunas if (ch["x0"] + ch["x1"]) / 2 >= x_div])
+        else:
+            # Fallback: duas colunas na página toda
+            blocos = [
+                [ch for ch in corpo_pagina if (ch["x0"] + ch["x1"]) / 2 < x_div],
+                [ch for ch in corpo_pagina if (ch["x0"] + ch["x1"]) / 2 >= x_div],
+            ]
 
     todos_radicais = achar_radicais(pagina)
     resultado = []
@@ -583,6 +708,9 @@ def processar_pagina(pagina, pasta_imagens: Optional[Path] = None) -> tuple:
     # 5. Remove caracteres de substituição (U+FFFD) se houver
     texto = texto.replace('\ufffd', '')
     
+    # Pós-processamento avançado: limpeza específica para provas FGV/Vunesp
+    texto = pos_processar_prova(texto, pagina.page_number)
+    
     # Extrai imagens se pasta informada
     imagens = []
     if pasta_imagens:
@@ -592,6 +720,100 @@ def processar_pagina(pagina, pasta_imagens: Optional[Path] = None) -> tuple:
             texto = f"{texto}\n\n{refs}" if texto else refs
     
     return texto, imagens
+
+
+def pos_processar_prova(texto: str, pagina_num: int) -> str:
+    """Pós-processamento específico para provas (FGV, Vunesp, etc.)."""
+    import re
+    
+    linhas = texto.split('\n')
+    saida = []
+    
+    # Padrões de rodapé/cabeçalho repetitivos para remover (mais abrangentes)
+    padroes_remover = [
+        r'SOLDADO\s+PM\s+DE\s+2[ª\º]\s+CLASSE\s*[–-]\s*TARDE',
+        r'TIPO\s+BRANCA\s*[–-]\s*P[ÁA]GINA\s+\d+',
+        r'www\.pciconcursos\.com\.br',
+        r'^SOLDADO\s+PM\s+DE\s+2[ª\º]\s+CLASSE\s*$',
+        r'CONHECIMENTOS\s+GERAIS',
+        r'MATEM[ÁA]TICA\s+\d+',
+        r'L[ÍI]NGUA\s+PORTUGUESA\s+E',
+        r'INTERPRETA[CÇ][AÃ]O\s+DE\s+TEXTO',
+        r'ESTADO\s+DE\s+S[ÃA]O\s+PAULO',
+        r'NO\s+MENOR\s+TEMPO\s+POSS[ÍI]VEL',
+    ]
+    
+    # Primeira passada: coleta linhas não removidas
+    linhas_filtradas = []
+    for linha in linhas:
+        linha_strip = linha.strip()
+        
+        # Remove linhas de rodapé/cabeçalho repetitivas (busca em qualquer parte da linha)
+        remover = False
+        for padrao in padroes_remover:
+            if re.search(padrao, linha_strip, re.IGNORECASE):
+                remover = True
+                break
+        if remover:
+            continue
+        linhas_filtradas.append(linha_strip)
+    
+    # Segunda passada: processa linhas consecutivas com apenas números
+    # (ex: "9" seguido de "15" -> coluna esquerda q9, coluna direita q15)
+    i = 0
+    while i < len(linhas_filtradas):
+        atual = linhas_filtradas[i]
+        # Se linha atual e próxima são apenas números, separa com linha vazia
+        if (re.match(r'^\d{1,2}$', atual) and 
+            i + 1 < len(linhas_filtradas) and 
+            re.match(r'^\d{1,2}$', linhas_filtradas[i + 1])):
+            saida.append(atual)
+            saida.append('')  # linha vazia para separar
+            i += 1
+            continue
+        saida.append(atual)
+        i += 1
+    
+    # Terceira passada: também trata caso de dois números na MESMA linha (ex: "9 15")
+    linhas_temp = []
+    for linha in saida:
+        # Corrige "9 15" na mesma linha -> "9\n15"
+        linha = re.sub(r'^(\d{1,2})\s+(\d{1,2})$', r'\1\n\2', linha)
+        linhas_temp.append(linha)
+    saida = linhas_temp
+    
+    # Quarta passada: processa cada linha
+    linhas_processadas = []
+    for linha in saida:
+        # Corrige formatação do número da questão: "1 " -> "1. "
+        # Se linha começa com número e tem texto depois, adiciona ponto
+        linha = re.sub(r'^(\d{1,2})\s+(?=[A-ZÀ-Ú])', r'\1. ', linha)
+        
+        # Separa alternativas unidas por " / " (vindas de colunas diferentes)
+        # Padrão: (A) texto / (B) texto -> quebra em linhas separadas
+        linha = re.sub(r'\s*/\s*(?=\([A-E]\)?[\s\.])', '\n', linha)
+        
+        # Garante que alternativas comecem em linha nova
+        # Padrão: texto (A) -> texto\n(A)
+        linha = re.sub(r'(\S)\s+(\([A-E]\)?[\s\.])', r'\1\n\2', linha)
+        
+        linhas_processadas.append(linha)
+    
+    saida = linhas_processadas
+    
+    # Junta linhas vazias consecutivas (máximo 1)
+    resultado_final = []
+    vazia_anterior = False
+    for linha in saida:
+        if linha.strip() == '':
+            if not vazia_anterior:
+                resultado_final.append('')
+            vazia_anterior = True
+        else:
+            resultado_final.append(linha)
+            vazia_anterior = False
+    
+    return '\n'.join(resultado_final)
 
 
 
