@@ -326,6 +326,15 @@ prova_images/
 
 **VUNESP**: Alternativas (B)-(E) podem faltar devido a limitação do pdfplumber — use `--ocr` para PDFs escaneados.
 
+### 🔧 Melhorias Recentes (v2024.11)
+
+- **Correção de loop infinito** no pós-processamento (`pos_processar_prova`) — adicionado contador global de operações (50.000 max) com verificações `check_ops()` em todos os laços
+- **Detecção de colunas robusta** — retorno antecipado quando `x_div is None` (páginas sem layout de duas colunas)
+- **Correção de bug em step 6/7** — uso correto de `linhas_processadas` em vez de `saida` para evitar loop infinito ao processar cada linha
+- **Processamento de 24 páginas** do PDF VUNESP de teste concluído em ~5.5s sem timeouts
+
+**Nota**: Palavras hifenizadas divididas entre colunas (ex: "estabe" + "lece" = "estabelece") são uma limitação conhecida de PDFs de duas colunas.
+
 Para PDFs escaneados: use `--ocr` (requer `pip install nougat-ocr` em ambiente com `transformers 4.x`).
 
 ## 📄 Licença
