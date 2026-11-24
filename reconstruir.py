@@ -529,15 +529,33 @@ def extrair_imagens(pagina, pasta_saida: Path, prefixo: str = "page") -> List[di
     pasta_saida.mkdir(parents=True, exist_ok=True)
     resultados = []
     
+    # Filtra watermarks conservadoramente: apenas imagens no rodapé EXTREMO (90% da altura)
+    # com dimensões típicas de marca d'água repetitiva
+    pagina_height = pagina.height
+    limite_rodape_extremo = pagina_height * 0.9
+    
     for idx, img in enumerate(pagina.images):
         try:
-            # pdfplumber retorna dict com 'stream', 'width', 'height', etc.
             stream = img.get("stream")
             if not stream:
                 continue
             
+            # Filtra watermarks óbvios: no rodapé extremo + dimensões típicas
+            img_y = img.get("top", 0)
+            img_w = img.get("width", 0)
+            img_h = img.get("height", 0)
+            
+            eh_watermark_obvio = (
+                img_y > limite_rodape_extremo and
+                240 <= img_w <= 290 and
+                240 <= img_h <= 290
+            )
+            
+            if eh_watermark_obvio:
+                continue  # Pula watermark óbvio
+            
             # Gera nome único
-            ext = ".png"  # pdfplumber extrai como PNG
+            ext = ".png"
             nome = f"{prefixo}_{pagina.page_number}_img{idx+1}{ext}"
             caminho = pasta_saida / nome
             
@@ -551,8 +569,8 @@ def extrair_imagens(pagina, pasta_saida: Path, prefixo: str = "page") -> List[di
                 "pagina": pagina.page_number,
                 "x": img.get("x0", 0),
                 "y": img.get("top", 0),
-                "largura": img.get("width", 0),
-                "altura": img.get("height", 0),
+                "largura": img_w,
+                "altura": img_h,
             })
         except Exception as e:
             print(f"[aviso] Falha ao extrair imagem {idx}: {e}", file=sys.stderr)
@@ -716,10 +734,61 @@ def processar_pagina(pagina, pasta_imagens: Optional[Path] = None) -> tuple:
     if pasta_imagens:
         imagens = extrair_imagens(pagina, pasta_imagens, f"page{pagina.page_number}")
         if imagens:
-            refs = "\n\n".join(f"![Imagem página {img['pagina']}]({img['arquivo']})" for img in imagens)
-            texto = f"{texto}\n\n{refs}" if texto else refs
+            # Insere imagens na posição aproximada baseada na coordenada Y
+            texto = inserir_imagens_no_texto(texto, imagens, pagina.height)
     
     return texto, imagens
+
+
+def inserir_imagens_no_texto(texto: str, imagens: list, pagina_height: float) -> str:
+    """Insere referências de imagens no texto na posição aproximada baseada na coordenada Y."""
+    if not imagens:
+        return texto
+    
+    # Ordena imagens por posição Y (topo da página = 0)
+    imagens_ordenadas = sorted(imagens, key=lambda img: img.get('y', 0))
+    
+    linhas = texto.split('\n')
+    if not linhas:
+        return "\n\n".join(f"![Imagem página {img['pagina']}]({img['arquivo']})" for img in imagens)
+    
+    # Estima a posição Y de cada linha baseada na distribuição
+    # Assume que as linhas estão distribuídas uniformemente na página
+    total_linhas = len(linhas)
+    linhas_com_pos = []
+    for i, linha in enumerate(linhas):
+        # Posição Y estimada (0 = topo, pagina_height = base)
+        y_estimado = (i / max(1, total_linhas - 1)) * pagina_height
+        linhas_com_pos.append((y_estimado, linha))
+    
+    # Insere imagens nas posições corretas
+    resultado = []
+    img_idx = 0
+    
+    for y_linha, linha in linhas_com_pos:
+        # Insere imagens que estão ANTES desta linha
+        while img_idx < len(imagens_ordenadas):
+            img = imagens_ordenadas[img_idx]
+            img_y = img.get('y', 0)
+            # Se a imagem está acima da linha atual (menor Y = mais no topo)
+            if img_y < y_linha:
+                ref = f"![Imagem página {img['pagina']}]({img['arquivo']})"
+                resultado.append(ref)
+                resultado.append("")  # linha em branco
+                img_idx += 1
+            else:
+                break
+        resultado.append(linha)
+    
+    # Insere imagens restantes no final
+    while img_idx < len(imagens_ordenadas):
+        img = imagens_ordenadas[img_idx]
+        ref = f"![Imagem página {img['pagina']}]({img['arquivo']})"
+        resultado.append(ref)
+        resultado.append("")
+        img_idx += 1
+    
+    return "\n".join(resultado)
 
 
 def pos_processar_prova(texto: str, pagina_num: int) -> str:
@@ -890,25 +959,36 @@ def detectar_formulas_bitmap(pagina):
     Retorna lista de dicts com 'bbox' (x0, y0, x1, y1) e metadados.
     """
     regioes = []
+    pagina_height = pagina.height
+    limite_rodape_extremo = pagina_height * 0.9
     
     # Procura por imagens na página que parecem fórmulas
     for img in pagina.images:
-        # Filtra: imagens pequenas a médias, não decorativas
+        # Filtra: imagens pequenas a grandes, não decorativas
         largura = img.get('width', 0)
         altura = img.get('height', 0)
         
-        # Heurística: fórmulas costumam ser imagens pequenas/médias
-        if 20 <= largura <= 400 and 20 <= altura <= 200:
+        # Heurística: fórmulas podem ser imagens de vários tamanhos
+        # Aumentado limites para capturar fórmulas maiores (ex: sistemas de equações)
+        if 20 <= largura <= 600 and 20 <= altura <= 500:
             # Verifica se não é decorativa (muito pequena ou muito grande)
             area = largura * altura
-            if 400 <= area <= 50000:
-                regioes.append({
-                    'bbox': (img['x0'], img['top'], img['x1'], img['bottom']),
-                    'x0': img['x0'],
-                    'y0': img['top'],
-                    'x1': img['x1'],
-                    'y1': img['bottom'],
-                })
+            if 400 <= area <= 200000:  # Aumentado de 50000 para 200000
+                # Filtra imagens que parecem ser fotos/gráficos decorativos (muito grandes)
+                # Fórmulas matemáticas costumam ter proporção mais quadrada ou retangular moderada
+                ratio = max(largura, altura) / min(largura, altura)
+                if ratio <= 4:  # Não muito alongado
+                    # Filtra watermarks: imagens que se estendem até o rodapé extremo
+                    # (watermarks típicos ocupam o rodapé até o final da página)
+                    img_bottom = img.get('bottom', 0)
+                    if img_bottom < limite_rodape_extremo:
+                        regioes.append({
+                            'bbox': (img['x0'], img['top'], img['x1'], img['bottom']),
+                            'x0': img['x0'],
+                            'y0': img['top'],
+                            'x1': img['x1'],
+                            'y1': img['bottom'],
+                        })
     
     return regioes
 
