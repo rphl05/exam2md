@@ -529,10 +529,10 @@ def extrair_imagens(pagina, pasta_saida: Path, prefixo: str = "page") -> List[di
     pasta_saida.mkdir(parents=True, exist_ok=True)
     resultados = []
     
-    # Filtra watermarks conservadoramente: apenas imagens no rodapé EXTREMO (90% da altura)
-    # com dimensões típicas de marca d'água repetitiva
+    # Filtra watermarks: imagens no rodapé (65% da altura) com dimensões típicas
+    # Watermark VUNESP: y=579 (68% de 841.92), 262.5x262.5
     pagina_height = pagina.height
-    limite_rodape_extremo = pagina_height * 0.9
+    limite_rodape = pagina_height * 0.65  # 65% da altura
     
     for idx, img in enumerate(pagina.images):
         try:
@@ -540,19 +540,19 @@ def extrair_imagens(pagina, pasta_saida: Path, prefixo: str = "page") -> List[di
             if not stream:
                 continue
             
-            # Filtra watermarks óbvios: no rodapé extremo + dimensões típicas
+            # Filtra watermarks: no rodapé + dimensões típicas de marca d'água repetitiva
             img_y = img.get("top", 0)
             img_w = img.get("width", 0)
             img_h = img.get("height", 0)
             
-            eh_watermark_obvio = (
-                img_y > limite_rodape_extremo and
+            eh_watermark = (
+                img_y > limite_rodape and
                 240 <= img_w <= 290 and
                 240 <= img_h <= 290
             )
             
-            if eh_watermark_obvio:
-                continue  # Pula watermark óbvio
+            if eh_watermark:
+                continue  # Pula watermark
             
             # Gera nome único
             ext = ".png"
@@ -895,6 +895,7 @@ def converter_hibrido(
     """
     Conversão híbrida: pdfplumber para texto/vetores + pix2tex para fórmulas bitmap.
     Detecta regiões de fórmula bitmap (imagens) e usa pix2tex para OCR seletivo.
+    Nota: Fórmulas vetoriais (curvas) são processadas pelo pipeline principal do pdfplumber.
     """
     try:
         from pix2tex.cli import LatexOCR
@@ -913,10 +914,10 @@ def converter_hibrido(
         for indice in alvos:
             pagina = pdf.pages[indice]
             
-            # 1. Processa com pdfplumber (texto/vetores)
+            # 1. Processa com pdfplumber (texto/vetores + frações/radicais vetoriais)
             texto, imagens = processar_pagina(pagina, None)  # sem pasta_imagens para não duplicar
             
-            # 2. Detecta regiões de fórmula bitmap (imagens na página)
+            # 2. Detecta regiões de fórmula bitmap (imagens matemáticas bitmap)
             formula_regioes = detectar_formulas_bitmap(pagina)
             
             # 3. Para cada região, extrai imagem e roda pix2tex
@@ -945,7 +946,6 @@ def extrair_regiao_como_imagem(pagina, regiao):
     """Extrai uma região da página como imagem PIL para OCR."""
     try:
         bbox = regiao['bbox']
-        # Cria crop da página
         crop = pagina.crop(bbox)
         img = crop.to_image(resolution=300)
         return img.original
@@ -960,7 +960,7 @@ def detectar_formulas_bitmap(pagina):
     """
     regioes = []
     pagina_height = pagina.height
-    limite_rodape_extremo = pagina_height * 0.9
+    limite_rodape = pagina_height * 0.65  # 65% da altura
     
     # Procura por imagens na página que parecem fórmulas
     for img in pagina.images:
@@ -978,10 +978,16 @@ def detectar_formulas_bitmap(pagina):
                 # Fórmulas matemáticas costumam ter proporção mais quadrada ou retangular moderada
                 ratio = max(largura, altura) / min(largura, altura)
                 if ratio <= 4:  # Não muito alongado
-                    # Filtra watermarks: imagens que se estendem até o rodapé extremo
-                    # (watermarks típicos ocupam o rodapé até o final da página)
-                    img_bottom = img.get('bottom', 0)
-                    if img_bottom < limite_rodape_extremo:
+                    # Filtra watermarks: imagens no rodapé com dimensões típicas
+                    img_y = img.get('top', 0)
+                    img_w = img.get('width', 0)
+                    img_h = img.get('height', 0)
+                    eh_watermark = (
+                        img_y > pagina_height * 0.65 and
+                        240 <= img_w <= 290 and
+                        240 <= img_h <= 290
+                    )
+                    if not eh_watermark:
                         regioes.append({
                             'bbox': (img['x0'], img['top'], img['x1'], img['bottom']),
                             'x0': img['x0'],
