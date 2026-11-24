@@ -578,29 +578,62 @@ def extrair_imagens(pagina, pasta_saida: Path, prefixo: str = "page") -> List[di
     return resultados
 
 
-def encontrar_inicio_colunas(chars, x_div, corpo, pagina_height):
+def encontrar_inicio_colunas(chars, x_div, corpo, pagina_height, pagina=None):
     """
     Detecta onde começa o layout de duas colunas.
     Procura onde AMBOS os lados têm conteúdo consistente (duas colunas reais).
+    Considera tanto texto quanto imagens.
     Retorna a coordenada Y onde as colunas começam, ou None se não detectado.
     """
+    # If no column divider, there's no two-column layout to detect
+    if x_div is None:
+        return None
+    
     from collections import defaultdict
     linhas = defaultdict(list)
     for ch in chars:
         top_key = round(ch["top"] / 2) * 2
         linhas[top_key].append(ch)
     
+    # Também considera imagens para detectar colunas
+    imagens_por_top = defaultdict(list)
+    if pagina is not None:
+        for img in pagina.images:
+            top_key = round(img.get("top", 0) / 2) * 2
+            # Só considera imagens que não são watermarks
+            img_y = img.get("top", 0)
+            img_w = img.get("width", 0)
+            img_h = img.get("height", 0)
+            eh_watermark = (
+                img_y > pagina_height * 0.65 and
+                240 <= img_w <= 290 and
+                240 <= img_h <= 290
+            )
+            if not eh_watermark:
+                imagens_por_top[top_key].append(img)
+    
     balanco_por_top = []
-    for top, chars_linha in sorted(linhas.items()):
+    for top in sorted(set(list(linhas.keys()) + list(imagens_por_top.keys()))):
+        chars_linha = linhas.get(top, [])
+        imgs_linha = imagens_por_top.get(top, [])
+        
         left = sum(1 for ch in chars_linha if (ch["x0"] + ch["x1"]) / 2 < x_div)
         right = sum(1 for ch in chars_linha if (ch["x0"] + ch["x1"]) / 2 >= x_div)
-        total = left + right
+        
+        # Also count images
+        left_img = sum(1 for img in imgs_linha if (img.get("x0", 0) + img.get("x1", 0)) / 2 < x_div)
+        right_img = sum(1 for img in imgs_linha if (img.get("x0", 0) + img.get("x1", 0)) / 2 >= x_div)
+        
+        left_total = left + left_img
+        right_total = right + right_img
+        total = left_total + right_total
+        
         if total > 5:
-            if left > 0 and right > 0:
-                ratio = min(left, right) / max(left, right)
+            if left_total > 0 and right_total > 0:
+                ratio = min(left_total, right_total) / max(left_total, right_total)
             else:
                 ratio = 0
-            balanco_por_top.append((top, ratio, left, right, total))
+            balanco_por_top.append((top, ratio, left_total, right_total, total))
     
     if not balanco_por_top:
         return None
@@ -652,7 +685,7 @@ def processar_pagina(pagina, pasta_imagens: Optional[Path] = None) -> tuple:
         blocos = [corpo_pagina]
     else:
         # Detecta onde começa o layout de duas colunas
-        y_inicio_colunas = encontrar_inicio_colunas(corpo_pagina, x_div, corpo, pagina.height)
+        y_inicio_colunas = encontrar_inicio_colunas(corpo_pagina, x_div, corpo, pagina.height, pagina)
         
         if y_inicio_colunas is not None:
             # Divide: acima de y_inicio_colunas = full width, abaixo = duas colunas
@@ -664,15 +697,13 @@ def processar_pagina(pagina, pasta_imagens: Optional[Path] = None) -> tuple:
                 blocos.append([ch for ch in corpo_colunas if (ch["x0"] + ch["x1"]) / 2 < x_div])
                 blocos.append([ch for ch in corpo_colunas if (ch["x0"] + ch["x1"]) / 2 >= x_div])
         else:
-            # Fallback: duas colunas na página toda
-            blocos = [
-                [ch for ch in corpo_pagina if (ch["x0"] + ch["x1"]) / 2 < x_div],
-                [ch for ch in corpo_pagina if (ch["x0"] + ch["x1"]) / 2 >= x_div],
-            ]
+            # Fallback: uma coluna na página toda (layout não tem duas colunas claras)
+            blocos = [corpo_pagina]
 
     todos_radicais = achar_radicais(pagina)
     resultado = []
-    for bloco in blocos:
+    
+    for idx_bloco, bloco in enumerate(blocos):
         if not bloco:
             continue
         fracoes = achar_fracoes(pagina, bloco)
@@ -681,7 +712,15 @@ def processar_pagina(pagina, pasta_imagens: Optional[Path] = None) -> tuple:
         else:
             esquerda = bloco is blocos[0]
             radicais = [r for r in todos_radicais if (r["x0"] < x_div) == esquerda]
-        resultado.extend(renderizar_coluna(bloco, corpo, fracoes, radicais))
+        
+        # Renderiza coluna
+        linhas_coluna = renderizar_coluna(bloco, corpo, fracoes, radicais)
+        
+        # Adiciona marcador de coluna para pós-processamento (exceto primeira coluna)
+        if idx_bloco > 0 and x_div is not None:
+            resultado.append("__COLUMN_BREAK__")
+        
+        resultado.extend(linhas_coluna)
         resultado.append("")
 
     if rodape:
@@ -795,10 +834,60 @@ def pos_processar_prova(texto: str, pagina_num: int) -> str:
     """Pós-processamento específico para provas (FGV, Vunesp, etc.)."""
     import re
     
-    linhas = texto.split('\n')
-    saida = []
+    # Global operation counter to prevent infinite loops
+    MAX_OPERATIONS = 50000
+    operation_count = 0
     
-    # Padrões de rodapé/cabeçalho repetitivos para remover (mais abrangentes)
+    def check_ops():
+        nonlocal operation_count
+        operation_count += 1
+        if operation_count > 50000:
+            raise RuntimeError("pos_processar_prova: Maximum operations exceeded")
+    
+    # 1. Primeiro, processa marcadores de quebra de coluna
+    linhas = texto.split('\n')
+    linhas_sem_marcadores = []
+    for linha in linhas:
+        check_ops()
+        if linha.strip() == '__COLUMN_BREAK__':
+            # Substitui por marcador interno que será processado depois
+            linhas_sem_marcadores.append('__COL_BREAK__')
+        else:
+            linhas_sem_marcadores.append(linha)
+    
+    # 2. Junta linhas que são continuação de LaTeX (frações, comandos)
+    # Evita quebrar \frac{...}{...} no meio
+    i = 0
+    max_iter = len(linhas_sem_marcadores) * 2
+    iter_count = 0
+    while i < len(linhas_sem_marcadores) - 1:
+        check_ops()
+        iter_count += 1
+        if iter_count > max_iter:
+            break
+        atual = linhas_sem_marcadores[i]
+        prox = linhas_sem_marcadores[i + 1]
+        # Se linha atual tem \frac{ ou { aberto e próxima continua
+        if (re.search(r'\\frac\{[^}]*\{[^}]*$', atual) or 
+            atual.count('{') > atual.count('}') or
+            atual.rstrip().endswith('\\')):
+            linhas_sem_marcadores[i] = atual + ' ' + prox.lstrip()
+            linhas_sem_marcadores[i + 1] = '__REMOVE__'
+            i += 1
+        i += 1
+    
+    linhas_sem_marcadores = [l for l in linhas_sem_marcadores if l != '__REMOVE__']
+    
+    # 3. Reconstrói texto com quebras de coluna como linhas vazias
+    resultado_com_quebras = []
+    for l in linhas_sem_marcadores:
+        if l == '__COL_BREAK__':
+            if resultado_com_quebras and resultado_com_quebras[-1].strip() != '':
+                resultado_com_quebras.append('')
+        else:
+            resultado_com_quebras.append(l)
+    
+    # 5. Remove linhas de rodapé/cabeçalho repetitivas
     padroes_remover = [
         r'SOLDADO\s+PM\s+DE\s+2[ª\º]\s+CLASSE\s*[–-]\s*TARDE',
         r'TIPO\s+BRANCA\s*[–-]\s*P[ÁA]GINA\s+\d+',
@@ -812,38 +901,34 @@ def pos_processar_prova(texto: str, pagina_num: int) -> str:
         r'NO\s+MENOR\s+TEMPO\s+POSS[ÍI]VEL',
     ]
     
-    # Primeira passada: coleta linhas não removidas
     linhas_filtradas = []
-    for linha in linhas:
+    for linha in resultado_com_quebras:
         linha_strip = linha.strip()
-        
-        # Remove linhas de rodapé/cabeçalho repetitivas (busca em qualquer parte da linha)
         remover = False
         for padrao in padroes_remover:
             if re.search(padrao, linha_strip, re.IGNORECASE):
                 remover = True
                 break
-        if remover:
-            continue
-        linhas_filtradas.append(linha_strip)
+        if not remover:
+            linhas_filtradas.append(linha_strip)
     
-    # Segunda passada: processa linhas consecutivas com apenas números
-    # (ex: "9" seguido de "15" -> coluna esquerda q9, coluna direita q15)
+    # 4. Processa números de questões consecutivos (ex: "9 15" -> "9\n15")
     i = 0
+    saida = []
     while i < len(linhas_filtradas):
+        check_ops()
         atual = linhas_filtradas[i]
-        # Se linha atual e próxima são apenas números, separa com linha vazia
         if (re.match(r'^\d{1,2}$', atual) and 
             i + 1 < len(linhas_filtradas) and 
             re.match(r'^\d{1,2}$', linhas_filtradas[i + 1])):
             saida.append(atual)
-            saida.append('')  # linha vazia para separar
+            saida.append('')  # separa
             i += 1
             continue
         saida.append(atual)
         i += 1
     
-    # Terceira passada: também trata caso de dois números na MESMA linha (ex: "9 15")
+    # 5. Corrige "9 15" na mesma linha -> "9\n15"
     linhas_temp = []
     for linha in saida:
         # Corrige "9 15" na mesma linha -> "9\n15"
@@ -851,26 +936,42 @@ def pos_processar_prova(texto: str, pagina_num: int) -> str:
         linhas_temp.append(linha)
     saida = linhas_temp
     
-    # Quarta passada: processa cada linha
+    # 6. Processa cada linha
     linhas_processadas = []
     for linha in saida:
+        check_ops()
         # Corrige formatação do número da questão: "1 " -> "1. "
-        # Se linha começa com número e tem texto depois, adiciona ponto
         linha = re.sub(r'^(\d{1,2})\s+(?=[A-ZÀ-Ú])', r'\1. ', linha)
         
         # Separa alternativas unidas por " / " (vindas de colunas diferentes)
-        # Padrão: (A) texto / (B) texto -> quebra em linhas separadas
         linha = re.sub(r'\s*/\s*(?=\([A-E]\)?[\s\.])', '\n', linha)
         
         # Garante que alternativas comecem em linha nova
-        # Padrão: texto (A) -> texto\n(A)
         linha = re.sub(r'(\S)\s+(\([A-E]\)?[\s\.])', r'\1\n\2', linha)
         
         linhas_processadas.append(linha)
     
-    saida = linhas_processadas
+    # 7. Junta linhas que são continuação de LaTeX
+    i = 0
+    max_iter = len(linhas_processadas) * 2
+    iter_count = 0
+    while i < len(linhas_processadas) - 1:
+        check_ops()
+        iter_count += 1
+        if iter_count > max_iter:
+            break
+        atual = linhas_processadas[i]
+        prox = linhas_processadas[i + 1]
+        if (re.search(r'\\frac\{[^}]*\{[^}]*$', atual) or 
+            atual.count('{') > atual.count('}') or
+            atual.rstrip().endswith('\\')):
+            linhas_processadas[i] = atual + ' ' + prox.lstrip()
+            linhas_processadas[i + 1] = ''
+            i += 1
+        i += 1
+    saida = [l for l in linhas_processadas if l != '']
     
-    # Junta linhas vazias consecutivas (máximo 1)
+    # 8. Junta linhas vazias consecutivas (máximo 1)
     resultado_final = []
     vazia_anterior = False
     for linha in saida:

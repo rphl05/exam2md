@@ -69,10 +69,10 @@ echo ============================================
 echo.
 
 REM Inicia servidor em background, aguarda ficar pronto, depois abre navegador
-start "exam2md API" /b .venv\Scripts\python.exe api.py
+start "exam2md API" cmd /c ".venv\Scripts\python.exe api.py"
 echo Aguardando servidor iniciar...
 timeout /t 3 >nul
-start "" http://localhost:8000/web/
+start "" "http://localhost:8000/web/"
 echo.
 echo Servidor rodando. Feche esta janela para parar.
 echo.
