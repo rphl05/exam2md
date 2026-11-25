@@ -12,10 +12,13 @@ Endpoints:
 """
 
 import argparse
+import importlib.util
 import io
 import re
 import shutil
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -30,6 +33,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from exam2md_launcher import comandos_instalar_formulas
 from reconstruir import converter, nome_seguro, parse_paginas
 
 app = FastAPI(title="exam2md", description="Provas em PDF -> Markdown com LaTeX + imagens", version="2.0.0")
@@ -129,6 +133,43 @@ def raiz():
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "exam2md"}
+
+
+# Instalação do reconhecimento de fórmulas (pix2tex) pela interface
+instalacao = {"status": "ocioso", "mensagem": ""}
+
+
+def formulas_disponiveis() -> bool:
+    importlib.invalidate_caches()
+    return importlib.util.find_spec("pix2tex") is not None
+
+
+def _instalar_formulas():
+    try:
+        for i, cmd in enumerate(comandos_instalar_formulas(sys.executable), 1):
+            instalacao["mensagem"] = f"Baixando e instalando (etapa {i}). Pode levar alguns minutos…"
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode != 0:
+                raise RuntimeError((r.stderr or r.stdout).strip()[-600:])
+        instalacao.update(status="ok", mensagem="Instalado.")
+    except Exception as e:  # noqa: BLE001
+        instalacao.update(status="erro", mensagem=f"Falha na instalação (verifique a internet): {e}")
+
+
+@app.get("/recursos")
+def recursos():
+    return {"formulas": formulas_disponiveis(), "instalacao": instalacao}
+
+
+@app.post("/recursos/formulas")
+def instalar_formulas():
+    if formulas_disponiveis():
+        return recursos()
+    with trava:
+        if instalacao["status"] != "instalando":
+            instalacao.update(status="instalando", mensagem="Iniciando…")
+            threading.Thread(target=_instalar_formulas, daemon=True).start()
+    return recursos()
 
 
 @app.post("/convert")

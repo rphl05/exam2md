@@ -1663,7 +1663,7 @@ def converter_com_nougat(pdf_path: Path, output_path: Path, paginas: Optional[Li
     """Converte PDF escaneado com Nougat. Retorna número de caracteres (0 se indisponível)."""
     exe = achar_nougat()
     if not exe:
-        print("Erro: Nougat não encontrado. Rode: python install_nougat.py", file=sys.stderr)
+        print("Erro: Nougat não encontrado. Rode: python exam2md_launcher.py --instalar-ocr", file=sys.stderr)
         return 0
     pdf_path, output_path = Path(pdf_path), Path(output_path)
     with tempfile.TemporaryDirectory() as tmp:

@@ -19,7 +19,6 @@ Thumbs.db
 # Outputs
 *.md
 !README.md
-!GUIA_USUARIO.md
 !*.md.example
 local-ocr/saida_*.md
 local-ocr/*.txt

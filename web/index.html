@@ -46,6 +46,9 @@
   textarea { width: 100%; height: 360px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px;
              background: var(--bg); color: var(--text); font: 13px/1.45 ui-monospace, Consolas, monospace; resize: vertical; }
   .oculto { display: none; }
+  .btn.mini { padding: 6px 12px; font-size: 13px; margin-top: 6px; }
+  .dica { margin-top: 14px; font-size: 13px; color: var(--muted); }
+  .dica summary { cursor: pointer; }
   footer { color: var(--muted); font-size: 13px; text-align: center; }
 </style>
 </head>
@@ -65,8 +68,10 @@
     <div class="opcoes">
       <label><input type="checkbox" id="imagens" checked>
         <span>Extrair imagens<small>Salva em <code>prova_images/</code> com nome da questão (ex.: <code>prova_q05_1.png</code>, <code>prova_q05_altB_1.png</code>).</small></span></label>
-      <label><input type="checkbox" id="formulas">
-        <span>Fórmulas em imagem → LaTeX (pix2tex)<small>Para provas em que as fórmulas são figuras. Mais lento; requer <code>pip install pix2tex</code>.</small></span></label>
+      <label><input type="checkbox" id="formulas" disabled>
+        <span>Fórmulas em imagem → LaTeX<small>Para provas em que as fórmulas são figuras (sem texto selecionável). Mais lento; confira o resultado.</small>
+          <small id="formulas-estado"></small>
+          <button type="button" class="btn sec mini oculto" id="instalar-formulas">Instalar este recurso (~1 GB)</button></span></label>
       <div>
         <label for="paginas" style="display:block;margin-bottom:4px">Páginas (opcional)</label>
         <input type="text" id="paginas" placeholder="Todas — ou ex.: 1-5, 8, 10">
@@ -87,6 +92,13 @@
       <button class="btn sec" id="copiar">Copiar Markdown</button>
     </div>
     <textarea id="previa" class="oculto" readonly></textarea>
+    <details class="dica oculto" id="dica">
+      <summary>Como abrir o arquivo .md?</summary>
+      <p>Descompacte o .zip e mantenha o <code>.md</code> junto da pasta <code>_images</code>. Para ver com fórmulas e imagens,
+        abra em um editor de Markdown como <a href="https://obsidian.md" target="_blank" rel="noopener">Obsidian</a>,
+        <a href="https://typora.io" target="_blank" rel="noopener">Typora</a> ou
+        <a href="https://code.visualstudio.com" target="_blank" rel="noopener">VS Code</a> (pré-visualização: Ctrl+Shift+V).</p>
+    </details>
   </section>
 
   <footer>exam2md · pdfplumber + LaTeX · nenhum arquivo sai do seu computador</footer>
@@ -184,13 +196,44 @@ async function acompanhar(id) {
       $('baixar').href = j.download;
       $('baixar').textContent = zip ? 'Baixar .zip (Markdown + imagens)' : `Baixar ${ok[0].arquivo}`;
       $('previa').value = j.previa + (j.previa_truncada ? '\n\n[… prévia cortada — baixe o arquivo completo]' : '');
-      ['acoes', 'previa'].forEach(i => $(i).classList.remove('oculto'));
+      ['acoes', 'previa', 'dica'].forEach(i => $(i).classList.remove('oculto'));
     }
   } catch (e) {
     $('status').innerHTML = `<span class="err">${escapar(e.message)}</span>`;
   }
   $('converter').disabled = arquivos.length === 0;
 }
+
+// Recurso opcional de fórmulas em imagem: mostra "Instalar" quando falta
+async function verRecursos() {
+  let r;
+  try { r = await lerJson(await fetch('/recursos')); } catch { return; }
+  const inst = r.instalacao, estado = $('formulas-estado'), botao = $('instalar-formulas');
+  $('formulas').disabled = !r.formulas;
+  if (r.formulas) {
+    estado.textContent = inst.status === 'ok' ? '✅ Recurso instalado.' : '';
+    botao.classList.add('oculto');
+    return;
+  }
+  $('formulas').checked = false;
+  if (inst.status === 'instalando') {
+    estado.textContent = '⏳ ' + inst.mensagem;
+    botao.classList.add('oculto');
+    setTimeout(verRecursos, 3000);
+  } else {
+    estado.innerHTML = inst.status === 'erro' ? `<span class="err">${escapar(inst.mensagem)}</span>`
+      : 'Recurso não instalado.';
+    botao.classList.remove('oculto');
+  }
+}
+$('instalar-formulas').onclick = async (e) => {
+  e.preventDefault();
+  $('instalar-formulas').classList.add('oculto');
+  $('formulas-estado').textContent = '⏳ Iniciando…';
+  try { await lerJson(await fetch('/recursos/formulas', { method: 'POST' })); } catch {}
+  verRecursos();
+};
+verRecursos();
 
 $('copiar').onclick = async () => {
   try { await navigator.clipboard.writeText($('previa').value); $('copiar').textContent = 'Copiado!'; }
