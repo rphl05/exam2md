@@ -74,7 +74,7 @@ def process_batch(pdf_files: List[Path], output_dir: Path = None,
             if images_dir:
                 img_dir = images_dir / f"{pdf_path.stem}_images"
             else:
-                img_dir = pdf_path.parent / f"{pdf_path.stem}_images"
+                img_dir = output_path.parent / f"{pdf_path.stem}_images"
         
         # Parse pages
         paginas = None
@@ -95,7 +95,7 @@ def process_batch(pdf_files: List[Path], output_dir: Path = None,
                 from reconstruir import converter_com_nougat
                 chars = converter_com_nougat(pdf_path, output_path, paginas)
             else:
-                chars = converter_pdf(pdf_path, output_path, paginas)
+                chars = converter_pdf(pdf_path, output_path, paginas, img_dir)
             
             tempo = time.time() - start_file
             stats["sucessos"] += 1
@@ -172,19 +172,29 @@ Exemplos:
     parser.add_argument("arquivos", nargs="+", help="Arquivos PDF ou padrões (ex: *.pdf)")
     parser.add_argument("-o", "--output", type=Path, help="Pasta de saída para arquivos .md")
     parser.add_argument("--pages", help="Páginas (ex: 1,3-5,10)")
-    parser.add_argument("--save-images", action="store_true", help="Extrai imagens")
+    parser.add_argument("--save-images", action="store_true", help=argparse.SUPPRESS)  # padrão agora
+    parser.add_argument("--no-images", action="store_true", help="Não extrai imagens")
     parser.add_argument("--images-dir", type=Path, help="Pasta customizada para imagens")
     parser.add_argument("--ocr", action="store_true", help="Usa Nougat OCR (para PDFs escaneados)")
     parser.add_argument("--relatorio", type=Path, help="Salva relatório JSON")
-    
+
     args = parser.parse_args()
-    
-    # Expande padrões (glob)
+    for fluxo in (sys.stdout, sys.stderr):
+        try:
+            fluxo.reconfigure(errors="replace")  # emojis em console Windows (cp1252)
+        except Exception:
+            pass
+    if args.output:
+        args.output.mkdir(parents=True, exist_ok=True)
+
+    # Expande padrões (glob) e pastas
     pdf_files = []
     for pattern in args.arquivos:
         path = Path(pattern)
         if path.is_file():
             pdf_files.append(path)
+        elif path.is_dir():
+            pdf_files.extend(sorted(path.glob("*.pdf")))
         else:
             # Expande glob
             parent = path.parent if path.parent != Path(".") else Path(".")
@@ -208,7 +218,7 @@ Exemplos:
         pdf_files=pdf_files_unique,
         output_dir=args.output,
         pages=args.pages,
-        save_images=args.save_images,
+        save_images=not args.no_images,
         images_dir=args.images_dir,
         ocr=args.ocr
     )

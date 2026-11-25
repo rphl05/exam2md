@@ -1,346 +1,110 @@
-# exam2md — Prova para Markdown com LaTeX
+# exam2md — Prova em PDF para Markdown com LaTeX
 
-Converte PDFs de provas (EEAR, IF, ENEM, Fuvest, VUNESP, concursos militares, etc.) para **Markdown com fórmulas em LaTeX**, 100% local, sem IA, sem nuvem.
+Converte provas em PDF (EEAR/CFS, VUNESP, FGV, ENEM, concursos) para **Markdown com fórmulas em LaTeX** e uma pasta de imagens nomeadas pela questão em que aparecem. Roda 100% no seu computador, em Windows, Linux e macOS.
 
-## ✨ Features
+```
+prova.pdf  →  prova.md
+              prova_images/
+                ├── prova_q05_1.png        (figura da questão 05)
+                ├── prova_q53_altB_1.png   (figura da alternativa B da questão 53)
+                ├── prova_pag01_1.png      (antes da 1ª questão: capa, instruções)
+                └── manifest.json          (questão, alternativa, página e posição de cada imagem)
+```
 
-- **100% local** — roda na sua máquina (CPU), sem API key, sem upload para nuvem
-- **Fórmulas em LaTeX** — frações `\frac{...}{...}`, raízes `\sqrt{...}`, subscritos/sobrescritos `_{...}` `^{...}`, matrizes
-- **Auto-nome** — `prova.pdf` → `prova.md` automaticamente
-- **Extração de imagens** — `--save-images` salva imagens em pasta + `manifest.json` com metadados
-- **OCR Nougat** — `--ocr` para PDFs escaneados (requer ambiente separado)
-- **Processamento em lote** — múltiplos PDFs em sequência (CLI + API)
-- **Interface web** — drag & drop, barra de progresso, download direto
-- **Páginas seletivas** — `--pages 1,3-5,10` ou pela web
-- **Rápido** — ~5 s para prova de 18 páginas (i7-3770, 8 GB RAM)
-- **Formatos suportados** — EEAR/CFS (a-d), VUNESP (A-E), ENEM, Fuvest, concursos militares
+## Como abrir (duplo clique)
 
-## 📦 Instalação
+| Sistema | Arquivo | O que faz |
+|---|---|---|
+| Windows | `exam2md_web.bat` | Prepara o ambiente na 1ª vez e abre a interface no navegador |
+| Windows | `exam2md_rapido.bat` | **Arraste um ou mais PDFs** sobre ele → gera `.md` + imagens ao lado do PDF |
+| macOS | `exam2md.command` | Abre a interface no navegador |
+| Linux | `run.sh` | Abre a interface no navegador |
+| Qualquer | `python exam2md_launcher.py` | O mesmo, pela linha de comando |
+
+Requisito único: [Python 3.10+](https://python.org/downloads) (no Windows, marque *Add Python to PATH*). Na primeira execução o launcher cria o `.venv` e instala as dependências.
+
+> macOS/Linux: se o duplo clique não executar, rode uma vez `chmod +x exam2md.command run.sh`.
+
+Na interface: arraste os PDFs, escolha as opções e clique em **Converter**. Você vê o progresso por página, uma prévia do Markdown e baixa um `.zip` com `prova.md` + `prova_images/` (ou só o `.md`, quando não há imagens).
+
+## Linha de comando
 
 ```bash
-# 1. Clone
-git clone https://github.com/rphl05/exam2md.git
-cd exam2md
+python reconstruir.py prova.pdf                  # prova.md + prova_images/
+python reconstruir.py prova.pdf -o saida/p.md    # nome/pasta de saída
+python reconstruir.py prova.pdf --pages 1,3-5    # só algumas páginas
+python reconstruir.py prova.pdf --no-images      # sem extrair imagens
+python reconstruir.py prova.pdf --hybrid         # fórmulas em IMAGEM → LaTeX (pix2tex)
+python reconstruir.py prova.pdf --ocr            # PDF escaneado (Nougat)
 
-# 2. Crie venv e instale deps
+python exam2md_batch.py provas/ -o saida/        # lote: pasta inteira ou *.pdf
+python api.py --abrir                            # só o servidor web (porta 8000)
+```
+
+## O que o conversor preserva
+
+| Elemento | Saída |
+|---|---|
+| Duas colunas | Lidas na ordem certa (esquerda, depois direita), com cabeçalho em largura total |
+| Frações e radicais vetoriais | `$\frac{2x}{1 - 2x}$`, `$\sqrt{3}$` |
+| Sub/sobrescritos | `$x^{2}$`, `$H_{2}O$`; ordinais viram `1º`, `2ª` |
+| Negrito / itálico | `**texto**`, `*texto*`, `***texto***` (pela fonte do PDF) |
+| Sublinhado | `<u>termo</u>` — essencial em "assinale o termo sublinhado" |
+| Lacunas `____` | `\_\_\_\_\_` (ex.: questões de crase) |
+| Quebras de linha | Junta só as linhas quebradas pela margem; versos, listas, alternativas e parágrafos ficam separados |
+| Hifenização | `apli-` + `cado` → `aplicado`; `pé-` + `-rapado` → `pé-rapado` |
+| `R$` | Escapado como `R\$` para não abrir modo matemático |
+| Imagens | Recortadas como PNG reais na posição em que aparecem no texto |
+| Cabeçalhos/rodapés repetidos | Removidos ("Confidencial até…", "Página 3", nome do concurso) |
+
+As fórmulas usam `$...$` (inline) e `$$...$$` (bloco), compatíveis com KaTeX, MathJax, Obsidian, Typora, Jupyter e GitHub.
+
+## Modos
+
+| Modo | Quando usar | Como funciona |
+|---|---|---|
+| Padrão | PDF digital (texto selecionável) | `pdfplumber`: texto, fontes e vetores do PDF. Rápido (~0,5 s/página) |
+| `--hybrid` | Fórmulas inseridas como **imagem** | Padrão + `pix2tex` nas imagens pequenas com cara de fórmula; o LaTeX entra no lugar da imagem. Instale com `pip install pix2tex` (o modelo leva ~40 s para carregar) |
+| `--ocr` | PDF **escaneado** | Chama o CLI do [Nougat](https://github.com/facebookresearch/nougat) instalado em `.venv-nougat` (`python install_nougat.py` ou `python exam2md_launcher.py --instalar-ocr`) |
+
+## Instalação manual
+
+```bash
 python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# Linux/Mac:
-source .venv/bin/activate
-
+# Windows: .venv\Scripts\activate    Linux/macOS: source .venv/bin/activate
 pip install -r requirements.txt
+pip install pix2tex        # opcional, para --hybrid
 ```
 
-## 🚀 Uso Rápido (3 formas)
-
-### 1. 🎯 Mais Simples: Drag & Drop (Windows)
-```bat
-# Arraste seu prova.pdf sobre exam2md_rapido.bat
-# → Gera prova.md + pasta prova_images/
-```
-
-### 2. 🖥️ Interface Web (Recomendado)
-```bash
-# Terminal 1: API
-python api.py
-# → http://localhost:8000
-
-# Terminal 2 (opcional): Frontend
-# ou abra web/index.html direto no navegador
-```
-
-### 3. 💻 CLI Direto
-```bash
-# Auto-nome: prova.pdf → prova.md
-python reconstruir.py prova.pdf
-
-# Com imagens
-python reconstruir.py prova.pdf --save-images
-
-# Pasta customizada para imagens
-python reconstruir.py prova.pdf --save-images --images-dir ./minhas_imagens
-
-# OCR para PDFs escaneados
-python reconstruir.py prova_escaneada.pdf --ocr
-
-# **NOVO: Modo híbrido (pdfplumber + pix2tex para fórmulas bitmap)**
-python reconstruir.py prova.pdf --hybrid
-python reconstruir.py prova.pdf --hybrid --save-images
-
-# Apenas páginas específicas
-python reconstruir.py prova.pdf --pages 1,3-5,10
-```
-
-### 4. 📦 Processamento em Lote (Batch)
-```bash
-# Múltiplos PDFs
-python exam2md_batch.py *.pdf
-
-# Com imagens
-python exam2md_batch.py *.pdf --save-images
-
-# Pasta de saída customizada
-python exam2md_batch.py provas/*.pdf -o saida/
-
-# Com OCR
-python exam2md_batch.py *.pdf --ocr
-
-# Relatório JSON
-python exam2md_batch.py *.pdf --relatorio relatorio.json
-```
-
-### 5. 🌐 API - Upload em Lote
-```bash
-# Inicia API
-python api.py
-# → http://localhost:8000
-```
-
-**Upload em lote:**
-```bash
-POST /convert-batch
-  files: [file1.pdf, file2.pdf, ...]
-  pages: "1,3-5"
-  save_images: true
-  ocr: false
-```
-
-**Acompanha progresso:**
-```
-GET /batch-status/abc12345
-```
-
-**Download final (ZIP com todos):**
-```
-GET /batch-download/abc12345
-```
-
-## 🖥️ Launchers (Multiplataforma)
-
-| Arquivo | Plataforma | Como Usa |
-|---------|------------|----------|
-| `exam2md_launcher.py` | **Linux, macOS, Windows** | `python exam2md_launcher.py` (compilável `.exe`/binário) |
-| `exam2md_launcher.bat` | Windows | Duplo clique (menu interativo) |
-| `exam2md.vbs` | Windows | Duplo clique (fixável na barra de tarefas) |
-| `exam2md_web.bat` | Windows | **Duplo clique → abre navegador** (mais simples) |
-| `exam2md_rapido.bat` | Windows | **Arraste PDF em cima** → gera `.md` |
-| `exam2md.bat` | Windows | Menu interativo (1=simples, 2=imagens, 3=OCR, 4=Web) |
-| `exam2md_batch.bat` | Windows | Menu para processamento em lote |
-| `install_nougat.py` | **Linux, macOS, Windows** | `python install_nougat.py` (instalador OCR cross-platform) |
-| `install_nougat.bat` | Windows | Duplo clique → instala Nougat OCR |
-
-**Linux/macOS:** Use os arquivos `.py` diretamente (`python exam2md_launcher.py`).
-**Windows:** Use `.bat`, `.vbs` ou `.py` — todos funcionam.
-
-### 🐧🍎 Suporte Linux e macOS
-
-A **lógica principal** (`reconstruir.py`, `api.py`, `exam2md_batch.py`, `exam2md_launcher.py`, `install_nougat.py`) é **100% Python puro** e roda em Linux, macOS e Windows.
-
-| Componente | Linux | macOS | Windows |
-|------------|-------|-------|---------|
-| Core (`reconstruir.py`, `api.py`, `exam2md_batch.py`) | ✅ | ✅ | ✅ |
-| API Web (`api.py` + `web/index.html`) | ✅ | ✅ | ✅ |
-| OCR Nougat | ✅ | ✅ (ARM64 nativo M1/M2/M3) | ✅ |
-| Launchers `.bat` | ❌ | ❌ | ✅ |
-| Launchers `.vbs` | ❌ | ❌ | ✅ |
-| Launchers `.py` | ✅ | ✅ | ✅ |
-
-### No Linux / macOS
-
-```bash
-# Instalação
-git clone https://github.com/rphl05/exam2md.git
-cd exam2md
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-# CLI direto
-python reconstruir.py prova.pdf --save-images
-
-# Batch
-python exam2md_batch.py *.pdf --save-images
-
-# OCR (requer install_nougat.py antes)
-python reconstruir.py prova.pdf --ocr
-
-# Web
-python api.py  # → http://localhost:8000
-
-# Instalador Nougat (cross-platform)
-python install_nougat.py
-
-# Launcher
-python exam2md_launcher.py
-```
-
-### Build nativo (Linux/macOS)
-```bash
-# Linux
-pyinstaller --onefile --name exam2md exam2md_launcher.py
-
-# macOS (binário)
-pyinstaller --onefile --name exam2md exam2md_launcher.py
-
-# macOS App nativo
-pyinstaller --onefile --windowed --name exam2md exam2md_launcher.py
-```
-
-### Compilar Executáveis (Multiplataforma)
-
-```bash
-pip install pyinstaller
-
-# Linux (binário ELF)
-pyinstaller --onefile --name exam2md exam2md_launcher.py
-# → dist/exam2md (binário ELF)
-
-# macOS (binário Mach-O)
-pyinstaller --onefile --name exam2md exam2md_launcher.py
-# → dist/exam2md (Mach-O 64-bit)
-
-# macOS (App nativo .app com ícone no Dock)
-pyinstaller --onefile --windowed --name exam2md exam2md_launcher.py
-# → dist/exam2md.app
-
-# Windows (executável .exe)
-pyinstaller --onefile --noconsole exam2md_launcher.py
-# → dist/exam2md.exe
-```
-
-**Build automático multi-plataforma:** Use GitHub Actions (`.github/workflows/build.yml`) para gerar Linux, macOS e Windows a cada push.
-
-## 📂 Estrutura do Projeto
+## Estrutura
 
 ```
-exam2md/
-├── reconstruir.py          # CLI principal (pdfplumber + LaTeX)
-├── exam2md_batch.py        # CLI batch processing
-├── api.py                  # FastAPI wrapper (/convert, /convert-batch, /batch-status, /download)
-├── web/index.html          # Interface drag & drop
-├── exam2md_web.bat         # Launcher web (duplo clique)
-├── exam2md_launcher.py     # Launcher Python (compilável .exe)
-├── exam2md_launcher.bat    # Launcher batch
-├── exam2md.vbs             # Launcher VBScript
-├── exam2md_rapido.bat      # Drag & drop rápido
-├── exam2md.bat             # Menu interativo
-├── exam2md_batch.bat       # Batch wrapper
-├── requirements.txt
-├── run.bat / run.sh
-├── .gitignore
-├── GUIA_USUARIO.md
-└── README.md
+reconstruir.py        conversor (CLI e biblioteca: converter(pdf, md, paginas, pasta_imagens, ...))
+api.py                servidor local (FastAPI) + interface em web/index.html
+exam2md_launcher.py   launcher multiplataforma (cria .venv, sobe servidor, abre navegador)
+exam2md_batch.py      conversão em lote
+exam2md_web.bat / exam2md_rapido.bat / exam2md.command / run.sh   atalhos de duplo clique
 ```
 
-7. **Extrai imagens** — salva PNGs + `manifest.json` com metadados
+### API
 
-## 🔀 Modo Híbrido (`--hybrid`)
-
-O modo híbrido combina o melhor dos dois mundos:
-
-| Modo | Texto/Vetores | Fórmulas Bitmap |
-|------|---------------|-----------------|
-| Padrão (`pdfplumber`) | ✅ Perfeito | ❌ Não detecta |
-| OCR Nougat (`--ocr`) | ✅ | ✅ (lento) |
-| **Híbrido (`--hybrid`)** | ✅ (pdfplumber) | ✅ (pix2tex) |
-
-### Como funciona:
-1. **pdfplumber** extrai texto, vetores, frações, radicais, subscritos/sobrescritos
-2. **Detecta regiões de fórmula bitmap** (imagens/vetores que o pdfplumber não lê)
-3. **Extrai regiões** como imagens PIL
-4. **pix2tex OCR** converte bitmap → LaTeX
-4. **Insere LaTeX** no markdown (`$$...$$` ou `$...$`)
-
-### Uso:
-```bash
-# Modo híbrido (recomendado para PDFs com fórmulas bitmap)
-python reconstruir.py prova.pdf --hybrid
-
-# Com extração de imagens
-python reconstruir.py prova.pdf --hybrid --save-images
-
-# Páginas específicas
-python reconstruir.py prova.pdf --hybrid --pages 1,3-5,10
+```
+POST /convert                 files=<pdf>[, ...]  pages="1,3-5"  extrair_imagens=true  formulas_imagem=false
+                              → {"job_id": "..."}
+GET  /jobs/{job_id}           status, progresso (%), resultados e prévia do Markdown
+GET  /jobs/{job_id}/download  .md, ou .zip com prova.md + prova_images/
 ```
 
-### Quando usar `--hybrid`:
-- ✅ PDFs com fórmulas renderizadas como **imagens bitmap** (não texto vetorial)
-- ✅ PDFs gerados por alguns editores (Word, Google Docs exportados)
-- ✅ PDFs escaneados de alta qualidade
-- ❌ PDFs puramente vetoriais (use modo padrão)
-- ❌ PDFs escaneados de baixa qualidade (use `--ocr`)
+O servidor escuta só em `127.0.0.1` e apaga conversões com mais de 6 h.
 
-### Exemplo de saída:
-```markdown
-25 – Se sen 20° = x, então tg 40° = ___________.
-a) \frac{2 \sqrt{1− x^{2}}}{1− 2x}
-b) \frac{2x \sqrt{1− x^{2}}}{1− 2x}
-c) \frac{2 \sqrt{1− x^{2}}}{1− 2x^{2}}
-d) \frac{2x \sqrt{1− x^{2}}}{1− 2x^{2}}
-```
+## Limitações conhecidas
 
-**Detectado em testes:** 11 frações, 3 raízes, 9 sobrescritos, 23 subscritos.
+- **Figuras vetoriais** (gráficos desenhados com linhas, não como imagem) não são recortadas — só imagens raster.
+- **Tabelas** saem como texto linha a linha, não como tabela Markdown.
+- Mais de 2 colunas, ou colunas que voltam a largura total no meio da página, não são detectadas.
+- A imagem é nomeada pela última questão vista antes dela; uma figura compartilhada ("Leia a tira para responder às questões 01 e 02") que venha antes do número recebe o nome da questão anterior.
+- Palavras hifenizadas no fim de uma coluna e continuadas na outra não são reunidas.
 
-Pipeline **determinístico** com `pdfplumber`:
+## Licença
 
-1. **Detecta colunas** pela linha vertical central
-2. **Agrupa linhas** por posição vertical (âncoras de todos os chars)
-3. **Classifica sub/sobrescrito** pelo deslocamento relativo à linha de base
-4. **Detecta frações** por barras vetoriais horizontais (espessura ~0,5)
-5. **Detecta radicais** por curvas vetoriais em "V" com barra superior
-6. **Traduz glifos Symbol** (área privada Unicode U+F0xx → LaTeX)
-6. **Corrige quebras de linha** — junta parágrafos, conserta hifenização
-7. **Extrai imagens** — salva PNGs + `manifest.json` com metadados
-
-## 📋 Exemplo de Saída
-
-```markdown
-25 – Se sen 20° = x, então tg 40° = ___________.
-a) \frac{2 \sqrt{1− x^{2}}}{1− 2x}
-b) \frac{2x \sqrt{1− x^{2}}}{1− 2x}
-c) \frac{2 \sqrt{1− x^{2}}}{1− 2x^{2}}
-d) \frac{2x \sqrt{1− x^{2}}}{1− 2x^{2}}
-
-27 – Seja ABC um triângulo isósceles, com Â = 120° e
-BC = 2 \sqrt{3} cm.
-```
-
-### Extração de Imagens
-```
-prova_images/
-├── manifest.json          # Metadados (página, x, y, largura, altura)
-├── page1_1_img1.png
-├── page2_3_img1.png
-└── ...
-```
-
-## ⚠️ Limitações
-
-| Cenário | Status |
-|---------|--------|
-| PDF digital (texto vetorial) | ✅ Perfeito |
-| PDF escaneado (imagem) | ⚠️ Use `--ocr` (Nougat) |
-| Fórmulas como bitmap | ❌ Não suportado |
-| Múltiplas colunas (>2) | ❌ Não detecta |
-
-**VUNESP**: Alternativas (B)-(E) podem faltar devido a limitação do pdfplumber — use `--ocr` para PDFs escaneados.
-
-### 🔧 Melhorias Recentes (v2024.11)
-
-- **Correção de loop infinito** no pós-processamento (`pos_processar_prova`) — adicionado contador global de operações (50.000 max) com verificações `check_ops()` em todos os laços
-- **Detecção de colunas robusta** — retorno antecipado quando `x_div is None` (páginas sem layout de duas colunas)
-- **Correção de bug em step 6/7** — uso correto de `linhas_processadas` em vez de `saida` para evitar loop infinito ao processar cada linha
-- **Processamento de 24 páginas** do PDF VUNESP de teste concluído em ~5.5s sem timeouts
-
-**Nota**: Palavras hifenizadas divididas entre colunas (ex: "estabe" + "lece" = "estabelece") são uma limitação conhecida de PDFs de duas colunas.
-
-Para PDFs escaneados: use `--ocr` (requer `pip install nougat-ocr` em ambiente com `transformers 4.x`).
-
-## 📄 Licença
-
-MIT — use livremente, inclusive comercialmente.
-
----
-
-**Desenvolvido para automatizar extração de provas EEAR/IF/ENEM/VUNESP/Fuvest** — PRs bem-vindos!
+MIT.

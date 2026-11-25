@@ -3,3 +3,5 @@ uvicorn[standard]>=0.29
 python-multipart>=0.0.6
 pdfplumber>=0.11
 pydantic>=2.7
+# Opcional: fórmulas em imagem -> LaTeX (modo --hybrid / opção na interface)
+#   pip install pix2tex

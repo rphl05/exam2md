@@ -31,3 +31,5 @@ temp/
 
 # Logs
 *.log
+# Saídas geradas ao lado dos PDFs
+*_images/

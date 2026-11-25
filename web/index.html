@@ -1,221 +1,191 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="pt-BR">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>exam2md - Prova para Markdown</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>exam2md</title>
 <style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --text: #1d2430; --muted: #667085; --line: #e3e6eb;
+    --accent: #2f6fde; --accent-soft: #e8f0fd; --ok: #1f8a4c; --err: #c4352b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171c; --card: #1c2028; --text: #e7e9ee; --muted: #98a1b0; --line: #2c323d;
+            --accent: #6b9cf0; --accent-soft: #1f2a3d; --ok: #4cc382; --err: #f07167; }
+  }
   * { box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    max-width: 720px; margin: 40px auto; padding: 0 20px;
-    background: #fafafa; color: #1a1a1a; line-height: 1.6;
-  }
-  h1 { font-size: 1.8rem; margin-bottom: 0.5rem; }
-  .subtitle { color: #666; margin-bottom: 2rem; }
-  .drop-zone {
-    border: 3px dashed #ccc; border-radius: 12px; padding: 3rem 2rem;
-    text-align: center; cursor: pointer; transition: all 0.2s;
-    background: white; position: relative;
-  }
-  .drop-zone:hover, .drop-zone.drag-over {
-    border-color: #0066cc; background: #f0f7ff;
-  }
-  .drop-zone input { display: none; }
-  .drop-zone-icon { font-size: 3rem; margin-bottom: 1rem; }
-  .drop-zone-text { font-size: 1.1rem; color: #444; }
-  .drop-zone-hint { font-size: 0.85rem; color: #888; margin-top: 0.5rem; }
-
-  .options { margin: 1.5rem 0; padding: 1rem; background: white; border-radius: 8px; }
-  .options label { display: block; margin-bottom: 0.5rem; font-weight: 500; }
-  .options input[type="text"] {
-    width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px;
-    font-family: monospace; font-size: 0.9rem;
-  }
-  .options small { color: #888; font-size: 0.8rem; }
-
-  .btn {
-    display: inline-flex; align-items: center; gap: 0.5rem;
-    padding: 0.75rem 1.5rem; font-size: 1rem; font-weight: 600;
-    border: none; border-radius: 8px; cursor: pointer; transition: all 0.15s;
-  }
-  .btn-primary { background: #0066cc; color: white; }
-  .btn-primary:hover:not(:disabled) { background: #0052a3; }
-  .btn-primary:disabled { background: #ccc; cursor: not-allowed; }
-  .btn-secondary { background: #eee; color: #333; }
-  .btn-secondary:hover { background: #ddd; }
-
-  .progress { display: none; margin-top: 1.5rem; }
-  .progress-bar {
-    height: 8px; background: #eee; border-radius: 4px; overflow: hidden;
-  }
-  .progress-fill {
-    height: 100%; background: #0066cc; width: 0%; transition: width 0.3s;
-  }
-  .progress-text { margin-top: 0.5rem; font-size: 0.9rem; color: #666; }
-
-  .result { display: none; margin-top: 1.5rem; padding: 1rem; background: white; border-radius: 8px; }
-  .result.success { border-left: 4px solid #28a745; }
-  .result.error { border-left: 4px solid #dc3545; }
-  .result h3 { margin: 0 0 0.5rem; font-size: 1rem; }
-  .result p { margin: 0.25rem 0; font-size: 0.9rem; color: #555; }
-  .result .stats { display: flex; gap: 1.5rem; margin-top: 0.75rem; font-size: 0.85rem; color: #666; }
-
-  footer { margin-top: 3rem; text-align: center; color: #999; font-size: 0.8rem; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { margin: 0 0 4px; font-size: 26px; }
+  .sub { margin: 0 0 24px; color: var(--muted); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  .drop { border: 2px dashed var(--line); border-radius: 10px; padding: 32px 16px; text-align: center;
+          cursor: pointer; transition: border-color .15s, background .15s; }
+  .drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+  .drop strong { display: block; font-size: 16px; margin-bottom: 4px; }
+  .drop span { color: var(--muted); font-size: 13px; }
+  #lista { list-style: none; padding: 0; margin: 12px 0 0; }
+  #lista li { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0;
+              border-bottom: 1px solid var(--line); font-size: 14px; }
+  #lista li button { border: 0; background: none; color: var(--muted); cursor: pointer; }
+  .opcoes { display: grid; gap: 12px; margin-top: 16px; }
+  .opcoes label { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; }
+  .opcoes small { display: block; color: var(--muted); }
+  input[type=text] { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+                     background: var(--bg); color: var(--text); font: inherit; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 8px; padding: 10px 18px;
+         font: inherit; font-weight: 600; cursor: pointer; background: var(--accent); color: #fff; text-decoration: none; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .btn.sec { background: var(--accent-soft); color: var(--accent); }
+  .acoes { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+  .barra { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; margin: 8px 0; }
+  .barra div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .status { color: var(--muted); font-size: 14px; }
+  .ok { color: var(--ok); } .err { color: var(--err); }
+  textarea { width: 100%; height: 360px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px;
+             background: var(--bg); color: var(--text); font: 13px/1.45 ui-monospace, Consolas, monospace; resize: vertical; }
+  .oculto { display: none; }
+  footer { color: var(--muted); font-size: 13px; text-align: center; }
 </style>
 </head>
 <body>
-<h1>📄 exam2md</h1>
-<p class="subtitle">Converte PDFs de provas (EEAR, IF, ENEM, Fuvest...) para Markdown com fórmulas LaTeX</p>
+<main>
+  <h1>exam2md</h1>
+  <p class="sub">Converte provas em PDF para Markdown com fórmulas em LaTeX e imagens nomeadas por questão. Tudo roda no seu computador.</p>
 
-<div class="drop-zone" id="dropZone">
-  <input type="file" id="fileInput" accept=".pdf">
-  <div class="drop-zone-icon">📎</div>
-  <div class="drop-zone-text">Arraste um PDF aqui ou clique para selecionar</div>
-  <div class="drop-zone-hint">Suporta PDFs digitais (texto vetorial). Escaneados precisam de OCR prévio.</div>
-</div>
+  <section class="card">
+    <div class="drop" id="drop" tabindex="0">
+      <strong>Arraste os PDFs aqui</strong>
+      <span>ou clique para escolher (pode selecionar vários)</span>
+      <input type="file" id="arquivo" accept=".pdf,application/pdf" multiple hidden>
+    </div>
+    <ul id="lista"></ul>
 
-<div class="options">
-  <label for="pagesInput">Páginas (opcional)</label>
-  <input type="text" id="pagesInput" placeholder="Ex.: 1,2,3 ou 1-5 ou 1,3-5" title="Lista separada por vírgula; use hífen para intervalos">
-  <small>Deixe vazio para converter todas as páginas. Ex.: "1-10" = páginas 1 a 10.</small>
-</div>
+    <div class="opcoes">
+      <label><input type="checkbox" id="imagens" checked>
+        <span>Extrair imagens<small>Salva em <code>prova_images/</code> com nome da questão (ex.: <code>prova_q05_1.png</code>, <code>prova_q05_altB_1.png</code>).</small></span></label>
+      <label><input type="checkbox" id="formulas">
+        <span>Fórmulas em imagem → LaTeX (pix2tex)<small>Para provas em que as fórmulas são figuras. Mais lento; requer <code>pip install pix2tex</code>.</small></span></label>
+      <div>
+        <label for="paginas" style="display:block;margin-bottom:4px">Páginas (opcional)</label>
+        <input type="text" id="paginas" placeholder="Todas — ou ex.: 1-5, 8, 10">
+      </div>
+    </div>
 
-<button class="btn btn-primary" id="convertBtn" disabled>
-  <span id="btnText">Converter</span>
-  <span id="btnSpinner" style="display:none">⏳</span>
-</button>
+    <div class="acoes">
+      <button class="btn" id="converter" disabled>Converter</button>
+    </div>
+  </section>
 
-<div class="progress" id="progress">
-  <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-  <div class="progress-text" id="progressText">Enviando...</div>
-</div>
+  <section class="card oculto" id="painel">
+    <div class="status" id="status">Enviando…</div>
+    <div class="barra"><div id="barra"></div></div>
+    <div id="resultados"></div>
+    <div class="acoes oculto" id="acoes">
+      <a class="btn" id="baixar" href="#">Baixar</a>
+      <button class="btn sec" id="copiar">Copiar Markdown</button>
+    </div>
+    <textarea id="previa" class="oculto" readonly></textarea>
+  </section>
 
-<div class="result" id="result"></div>
-
-<footer>
-  exam2md v1.0 · <a href="https://github.com/seu-usuario/exam2md" target="_blank">GitHub</a> ·
-  Roda 100% local (FastAPI + pdfplumber) · Sem IA, sem nuvem
-</footer>
+  <footer>exam2md · pdfplumber + LaTeX · nenhum arquivo sai do seu computador</footer>
+</main>
 
 <script>
-const dropZone = document.getElementById('dropZone');
-const fileInput = document.getElementById('fileInput');
-const pagesInput = document.getElementById('pagesInput');
-const convertBtn = document.getElementById('convertBtn');
-const btnText = document.getElementById('btnText');
-const btnSpinner = document.getElementById('btnSpinner');
-const progress = document.getElementById('progress');
-const progressFill = document.getElementById('progressFill');
-const progressText = document.getElementById('progressText');
-const resultDiv = document.getElementById('result');
+const $ = (id) => document.getElementById(id);
+let arquivos = [];
 
-let selectedFile = null;
-const API_URL = window.location.origin; // same origin
-
-// Drag & drop
-['dragenter', 'dragover'].forEach(evt => {
-  dropZone.addEventListener(evt, e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
-});
-['dragleave', 'drop'].forEach(evt => {
-  dropZone.addEventListener(evt, e => { e.preventDefault(); dropZone.classList.remove('drag-over'); });
-});
-dropZone.addEventListener('drop', e => {
-  const file = e.dataTransfer.files[0];
-  if (file && file.type === 'application/pdf') handleFile(file);
-});
-dropZone.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', e => {
-  if (e.target.files[0]) handleFile(e.target.files[0]);
-});
-
-function handleFile(file) {
-  if (file.type !== 'application/pdf') {
-    showResult('error', 'Tipo inválido', 'Selecione um arquivo PDF.');
-    return;
-  }
-  selectedFile = file;
-  convertBtn.disabled = false;
-  btnText.textContent = `Converter ${file.name}`;
-  resultDiv.style.display = 'none';
+function atualizarLista() {
+  $('lista').innerHTML = '';
+  arquivos.forEach((f, i) => {
+    const li = document.createElement('li');
+    li.innerHTML = `<span></span><button title="Remover">✕</button>`;
+    li.querySelector('span').textContent = `${f.name} (${(f.size / 1048576).toFixed(1)} MB)`;
+    li.querySelector('button').onclick = () => { arquivos.splice(i, 1); atualizarLista(); };
+    $('lista').appendChild(li);
+  });
+  $('converter').disabled = arquivos.length === 0;
+  $('converter').textContent = arquivos.length > 1 ? `Converter ${arquivos.length} provas` : 'Converter';
 }
 
-async function convert() {
-  if (!selectedFile) return;
+function adicionar(lista) {
+  for (const f of lista) {
+    if (f.name.toLowerCase().endsWith('.pdf') && !arquivos.some(a => a.name === f.name && a.size === f.size)) arquivos.push(f);
+  }
+  atualizarLista();
+}
 
-  const pages = pagesInput.value.trim() || null;
-  const formData = new FormData();
-  formData.append('file', selectedFile);
-  if (pages) formData.append('pages', pages);
+const drop = $('drop');
+drop.onclick = () => $('arquivo').click();
+drop.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') $('arquivo').click(); };
+$('arquivo').onchange = (e) => { adicionar(e.target.files); e.target.value = ''; };
+['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => adicionar(e.dataTransfer.files));
 
-  setLoading(true);
-  progress.style.display = 'block';
-  progressFill.style.width = '10%';
-  progressText.textContent = 'Enviando...';
+function escapar(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+
+$('converter').onclick = async () => {
+  const dados = new FormData();
+  arquivos.forEach(f => dados.append('files', f));
+  if ($('paginas').value.trim()) dados.append('pages', $('paginas').value.trim());
+  dados.append('extrair_imagens', $('imagens').checked);
+  dados.append('formulas_imagem', $('formulas').checked);
+
+  $('converter').disabled = true;
+  $('painel').classList.remove('oculto');
+  ['acoes', 'previa'].forEach(id => $(id).classList.add('oculto'));
+  $('resultados').innerHTML = '';
+  $('barra').style.width = '0';
+  $('status').textContent = 'Enviando…';
 
   try {
-    // Simulate progress (since we can't get real upload progress easily)
-    let prog = 10;
-    const interval = setInterval(() => {
-      prog = Math.min(prog + 15, 90);
-      progressFill.style.width = prog + '%';
-      progressText.textContent = `Processando... ${prog}%`;
-    }, 500);
+    const r = await fetch('/convert', { method: 'POST', body: dados });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || 'Erro ao enviar');
+    acompanhar(j.job_id);
+  } catch (e) {
+    $('status').innerHTML = `<span class="err">${escapar(e.message)}</span>`;
+    $('converter').disabled = false;
+  }
+};
 
-    const resp = await fetch(`${API_URL}/convert`, {
-      method: 'POST',
-      body: formData,
-    });
-
-    clearInterval(interval);
-    progressFill.style.width = '100%';
-
-    const data = await resp.json();
-
-    if (!resp.ok) {
-      throw new Error(data.detail || 'Erro na conversão');
+async function acompanhar(id) {
+  try {
+    const r = await fetch(`/jobs/${id}`);
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || 'Erro');
+    $('barra').style.width = j.progresso + '%';
+    if (j.status !== 'concluido') {
+      $('status').textContent = j.status === 'na_fila' ? 'Na fila…'
+        : `Convertendo ${j.arquivo_atual || ''}… ${j.progresso}%` + ($('formulas').checked ? ' (o modelo de fórmulas leva ~1 min para carregar na 1ª vez)' : '');
+      setTimeout(() => acompanhar(id), 700);
+      return;
     }
-
-    progressText.textContent = 'Concluído!';
-    showResult('success', 'Conversão concluída', `
-      <p><strong>Arquivo:</strong> ${data.filename}</p>
-      <p><strong>Caracteres:</strong> ${data.chars.toLocaleString()}</p>
-      <p><strong>Páginas:</strong> ${data.pages}</p>
-      <div class="stats">
-        <span>✅ Pronto para download</span>
-      </div>
-    `, data.download_url);
-
-  } catch (err) {
-    showResult('error', 'Erro', err.message);
-  } finally {
-    setLoading(false);
-    setTimeout(() => progress.style.display = 'none', 1000);
+    const ok = j.resultados.filter(x => x.ok);
+    $('status').innerHTML = ok.length ? `<span class="ok">Concluído.</span>` : `<span class="err">Nenhum arquivo convertido.</span>`;
+    $('resultados').innerHTML = j.resultados.map(x => x.ok
+      ? `<div>✅ <strong>${escapar(x.arquivo)}</strong> — ${x.paginas} páginas, ${x.imagens} imagens, ${x.caracteres.toLocaleString('pt-BR')} caracteres</div>`
+      : `<div class="err">❌ ${escapar(x.pdf)}: ${escapar(x.erro)}</div>`).join('');
+    if (j.download) {
+      const zip = ok.length > 1 || ok[0].imagens > 0;
+      $('baixar').href = j.download;
+      $('baixar').textContent = zip ? 'Baixar .zip (Markdown + imagens)' : `Baixar ${ok[0].arquivo}`;
+      $('previa').value = j.previa + (j.previa_truncada ? '\n\n[… prévia cortada — baixe o arquivo completo]' : '');
+      ['acoes', 'previa'].forEach(i => $(i).classList.remove('oculto'));
+    }
+  } catch (e) {
+    $('status').innerHTML = `<span class="err">${escapar(e.message)}</span>`;
   }
+  $('converter').disabled = arquivos.length === 0;
 }
 
-function setLoading(loading) {
-  convertBtn.disabled = loading;
-  btnSpinner.style.display = loading ? 'inline' : 'none';
-  btnText.textContent = loading ? 'Convertendo...' : `Converter ${selectedFile?.name || ''}`;
-}
-
-function showResult(type, title, html, downloadUrl = null) {
-  let btnHtml = '';
-  if (downloadUrl) {
-    btnHtml = `<button class="btn btn-primary" onclick="window.location.href='${downloadUrl}'">⬇ Baixar ${selectedFile?.name?.replace('.pdf', '.md') || 'arquivo.md'}</button>`;
-  }
-  resultDiv.className = `result ${type}`;
-  resultDiv.innerHTML = `
-    <h3>${type === 'success' ? '✅' : '❌'} ${title}</h3>
-    ${html}
-    ${btnHtml}
-  `;
-  resultDiv.style.display = 'block';
-  resultDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-}
-
-convertBtn.addEventListener('click', convert);
+$('copiar').onclick = async () => {
+  try { await navigator.clipboard.writeText($('previa').value); $('copiar').textContent = 'Copiado!'; }
+  catch { $('previa').select(); document.execCommand('copy'); $('copiar').textContent = 'Copiado!'; }
+  setTimeout(() => $('copiar').textContent = 'Copiar Markdown', 1500);
+};
 </script>
 </body>
 </html>

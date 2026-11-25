@@ -13,9 +13,10 @@ import webbrowser
 from pathlib import Path
 
 def find_python():
-    """Encontra o executável do Python"""
-    # Tenta python no PATH
-    for cmd in ["python", "python3", "py"]:
+    """Encontra o executável do Python 3"""
+    if not getattr(sys, "frozen", False):
+        return sys.executable  # rodando como script: usa o próprio interpretador
+    for cmd in ["python3", "python", "py"]:
         try:
             result = subprocess.run([cmd, "--version"], capture_output=True)
             if result.returncode == 0:
@@ -44,16 +45,17 @@ def setup_venv(project_dir: Path, python_cmd: str) -> Path:
     venv_dir = project_dir / ".venv"
     venv_python = venv_dir / "Scripts" / "python.exe" if sys.platform == "win32" else venv_dir / "bin" / "python"
     
+    requisitos = project_dir / "requirements.txt"
+    marcador = venv_dir / ".requirements_instalados"
     if not venv_python.exists():
-        print("[1/3] Criando ambiente virtual...")
-        subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
-        print("[2/3] Instalando dependências...")
-        subprocess.run([str(venv_python), "-m", "pip", "install", "-r", "requirements.txt"], check=True)
-    else:
-        print("[1/2] Verificando dependências...")
-        subprocess.run([str(venv_python), "-m", "pip", "install", "-r", "requirements.txt"], 
-                      capture_output=True)
-    
+        print("[1/2] Criando ambiente virtual (só na primeira vez)...")
+        subprocess.run([python_cmd, "-m", "venv", str(venv_dir)], check=True)
+    # Reinstala só se o requirements.txt mudou desde a última instalação
+    if not marcador.exists() or marcador.read_text() != requisitos.read_text():
+        print("[2/2] Instalando dependências...")
+        subprocess.run([str(venv_python), "-m", "pip", "install", "-q", "-r", str(requisitos)], check=True)
+        marcador.write_text(requisitos.read_text())
+
     return venv_python
 
 def open_browser_delayed(url: str, delay: float = 2.0):
@@ -118,87 +120,60 @@ def install_nougat_ocr(project_dir: Path, python_cmd: str) -> bool:
     return True
 
 
+def avisar(msg: str):
+    """Mostra a mensagem mesmo quando compilado sem console (--noconsole)."""
+    print(msg)
+    if getattr(sys, "frozen", False):
+        try:
+            import tkinter
+            from tkinter import messagebox
+            raiz = tkinter.Tk()
+            raiz.withdraw()
+            messagebox.showinfo("exam2md", msg)
+            raiz.destroy()
+        except Exception:
+            pass
+
+
 def main():
-    # Diretório do script/executável
-    if getattr(sys, 'frozen', False):
-        # Executando como executável compilado
-        base_dir = Path(sys.executable).parent
-    else:
-        # Executando como script
-        base_dir = Path(__file__).parent
-    
+    """Duplo clique: prepara o ambiente, sobe o servidor e abre o navegador.
+
+    python exam2md_launcher.py               # interface web
+    python exam2md_launcher.py --instalar-ocr  # instala o Nougat (PDF escaneado)
+    """
+    base_dir = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
     os.chdir(base_dir)
-    
+
+    python_cmd = find_python()
+    if not python_cmd:
+        avisar("Python não encontrado.\nInstale em https://python.org/downloads "
+               "(no Windows, marque 'Add Python to PATH').")
+        return 1
+
+    if "--instalar-ocr" in sys.argv:
+        ok = install_nougat_ocr(base_dir, python_cmd)
+        avisar("Nougat instalado." if ok else "Falha ao instalar o Nougat.")
+        return 0 if ok else 1
+
     print("=" * 50)
     print("  exam2md - Conversor de Provas para Markdown")
     print("=" * 50)
-    print()
-    print("Escolha o modo:")
-    print("  1) Servidor Web (conversao via navegador)")
-    print("  2) Instalar/Atualizar Nougat OCR (para PDFs escaneados)")
-    print("  3) Sair")
-    print()
-    
-    while True:
-        choice = input("Escolha (1/2/3): ").strip()
-        if choice in ("1", "2", "3"):
-            break
-        print("Opcao invalida. Digite 1, 2 ou 3.")
-    
-    if choice == "3":
-        return 0
-    
-    if choice == "2":
-        # Instala Nougat OCR
-        python_cmd = find_python()
-        if not python_cmd:
-            input("ERRO: Python nao encontrado!\nInstale em: https://python.org/downloads\nMarque 'Add Python to PATH'\n\nPressione Enter para sair...")
-            return 1
-        
-        print(f"Python encontrado: {python_cmd}")
-        if not install_nougat_ocr(Path(base_dir), python_cmd):
-            input("\nFalha na instalacao. Pressione Enter para sair...")
-            return 1
-        input("\nInstalacao concluida! Pressione Enter para continuar...")
-        # Volta ao menu principal
-        return main()
-    
-    # Opção 1: Servidor Web
-    # Encontra Python
-    python_cmd = find_python()
-    if not python_cmd:
-        input("ERRO: Python não encontrado!\nInstale em: https://python.org/downloads\nMarque 'Add Python to PATH'\n\nPressione Enter para sair...")
+    try:
+        venv_python = setup_venv(base_dir, python_cmd)
+    except subprocess.CalledProcessError as e:
+        avisar(f"Erro ao preparar o ambiente: {e}")
         return 1
 
-    # Configura venv e inicia servidor
-    venv_python = setup_venv(Path(base_dir), python_cmd)
-    
-    print("\n[OK] Servidor iniciando em http://localhost:8000")
-    print("Abrindo navegador...")
-    print()
-    print("=" * 50)
-    print("  PRONTO! O navegador vai abrir automaticamente.")
-    print("  Arraste seu PDF na area indicada e clique 'Converter'.")
-    print("=" * 50)
-    print()
-    print("Para parar: pressione Ctrl+C nesta janela.")
-    print("=" * 50)
-    print()
-
-    # Abre navegador após delay
-    open_browser_delayed("http://localhost:8000/web/", delay=2.0)
-    
-    # Inicia servidor (bloqueia)
+    print("\nAbrindo o navegador... Para parar, feche esta janela (ou Ctrl+C).\n")
     try:
-        subprocess.run([str(venv_python), "api.py"], check=True)
+        subprocess.run([str(venv_python), "api.py", "--abrir"], check=True)
     except KeyboardInterrupt:
         print("\nServidor parado.")
     except subprocess.CalledProcessError as e:
-        print(f"\nERRO ao iniciar servidor: {e}")
-        input("Pressione Enter para sair...")
+        avisar(f"Erro ao iniciar o servidor: {e}")
         return 1
-
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())
