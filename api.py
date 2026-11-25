@@ -25,8 +25,9 @@ import zipfile
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from reconstruir import converter, nome_seguro, parse_paginas
@@ -42,6 +43,29 @@ jobs = {}
 trava = threading.Lock()
 # Uma conversão por vez: o pdfplumber é pesado e o pix2tex não é thread-safe
 fila = threading.Semaphore(1)
+
+AVISO_PAGINA_ANTIGA = ("Nenhum PDF recebido. Se você acabou de atualizar o exam2md, "
+                       "o navegador está usando a página antiga: recarregue com Ctrl+F5 (Cmd+Shift+R no Mac).")
+
+
+@app.middleware("http")
+async def sem_cache_na_interface(request: Request, call_next):
+    """Evita que o navegador guarde a interface antiga depois de uma atualização."""
+    resposta = await call_next(request)
+    if request.url.path.startswith("/web"):
+        resposta.headers["Cache-Control"] = "no-cache"
+    return resposta
+
+
+@app.exception_handler(RequestValidationError)
+async def erro_de_validacao(_request: Request, exc: RequestValidationError):
+    """Devolve 'detail' como texto legível (o padrão do FastAPI é uma lista de objetos)."""
+    campos = {str(e.get("loc", [""])[-1]) for e in exc.errors()}
+    if "files" in campos:
+        msg = AVISO_PAGINA_ANTIGA
+    else:
+        msg = "; ".join(f"{'.'.join(map(str, e.get('loc', [])))}: {e.get('msg')}" for e in exc.errors())
+    return JSONResponse(status_code=422, content={"detail": msg})
 
 
 def _limpar_antigos():
@@ -116,7 +140,7 @@ async def convert(
 ):
     _limpar_antigos()
     if not files:
-        raise HTTPException(400, "Nenhum arquivo enviado")
+        raise HTTPException(400, AVISO_PAGINA_ANTIGA)
     try:
         paginas = parse_paginas(pages)
     except ValueError:

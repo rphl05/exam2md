@@ -126,6 +126,21 @@ drop.addEventListener('drop', e => adicionar(e.dataTransfer.files));
 
 function escapar(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 
+// Lê a resposta mesmo quando não é JSON e transforma qualquer 'detail' em texto legível
+async function lerJson(r) {
+  const texto = await r.text();
+  let j;
+  try { j = JSON.parse(texto); } catch { j = { detail: texto || `HTTP ${r.status}` }; }
+  if (!r.ok) {
+    const d = j.detail;
+    const msg = typeof d === 'string' ? d
+      : Array.isArray(d) ? d.map(e => e.msg || JSON.stringify(e)).join('; ')
+      : d ? JSON.stringify(d) : `Erro HTTP ${r.status}`;
+    throw new Error(msg);
+  }
+  return j;
+}
+
 $('converter').onclick = async () => {
   const dados = new FormData();
   arquivos.forEach(f => dados.append('files', f));
@@ -141,9 +156,7 @@ $('converter').onclick = async () => {
   $('status').textContent = 'Enviando…';
 
   try {
-    const r = await fetch('/convert', { method: 'POST', body: dados });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.detail || 'Erro ao enviar');
+    const j = await lerJson(await fetch('/convert', { method: 'POST', body: dados }));
     acompanhar(j.job_id);
   } catch (e) {
     $('status').innerHTML = `<span class="err">${escapar(e.message)}</span>`;
@@ -153,9 +166,7 @@ $('converter').onclick = async () => {
 
 async function acompanhar(id) {
   try {
-    const r = await fetch(`/jobs/${id}`);
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.detail || 'Erro');
+    const j = await lerJson(await fetch(`/jobs/${id}`));
     $('barra').style.width = j.progresso + '%';
     if (j.status !== 'concluido') {
       $('status').textContent = j.status === 'na_fila' ? 'Na fila…'
