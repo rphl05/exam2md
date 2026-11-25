@@ -66,7 +66,7 @@ As fórmulas usam `$...$` (inline) e `$$...$$` (bloco), compatíveis com KaTeX, 
 | Modo | Quando usar | Como funciona |
 |---|---|---|
 | Padrão | PDF digital (texto selecionável) | `pdfplumber`: texto, fontes e vetores do PDF. Rápido (~0,5 s/página) |
-| `--hybrid` | Fórmulas como **imagem** ou **desenho vetorial** | Padrão + `pix2tex` nas imagens pequenas com cara de fórmula; o LaTeX entra no lugar da imagem (inline ou `$$`). Sem `--hybrid`, essas fórmulas ficam como imagem. Instale com `pip install pix2tex` (o modelo leva ~40 s para carregar); confira o resultado, o OCR erra dígitos às vezes |
+| `--hybrid` | Fórmulas como **imagem** ou **desenho vetorial** | Padrão + `pix2tex` nas imagens pequenas com cara de fórmula; o LaTeX entra no lugar da imagem (inline ou `$$`). Sem `--hybrid`, essas fórmulas ficam como imagem. Instale com `pip install pix2tex` (o modelo leva ~40 s para carregar); confira o resultado, o OCR erra dígitos às vezes. Quando o resultado não é confiável — LaTeX malformado, vários blocos lado a lado (ex.: três sistemas `{` em sequência) ou caixas de formulário — a fórmula fica como imagem e o console avisa |
 | `--ocr` | PDF **escaneado** | Chama o CLI do [Nougat](https://github.com/facebookresearch/nougat) instalado em `.venv-nougat` (`python install_nougat.py` ou `python exam2md_launcher.py --instalar-ocr`) |
 
 ## Instalação manual

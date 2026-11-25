@@ -1351,6 +1351,133 @@ def carregar_pix2tex():
     return _MODELO_PIX2TEX
 
 
+def _segmentos_de_formula(img):
+    """Divide a imagem de uma fórmula em blocos lado a lado que começam com um
+    delimitador alto (chave/colchete de sistema), ex.: três sistemas lado a lado.
+    O pix2tex foi treinado com fórmulas isoladas e embaralha chaves vizinhas.
+    Devolve faixas (x0, x1) em pixels; [(0, largura)] quando não há o que dividir."""
+    cinza = img.convert("L")
+    w, h = cinza.size
+    px = cinza.load()
+    linhas = []  # por coluna: conjunto de linhas com tinta (200: traços finos ficam cinza)
+    for x in range(w):
+        linhas.append({y for y in range(h) if px[x, y] < 200})
+    spans = [(min(ys), max(ys)) if ys else None for ys in linhas]
+
+    def maior_traco(ys):
+        """Maior trecho vertical contínuo (tolera falhas de 2 px)."""
+        melhor, ini, ant = 0, None, None
+        for y in sorted(ys):
+            if ini is None or y - ant > 3:
+                ini = y
+            melhor, ant = max(melhor, y - ini + 1), y
+        return melhor
+
+    com_tinta = [s for s in spans if s]
+    if not com_tinta:
+        return [(0, w)]
+    topo = min(s[0] for s in com_tinta)
+    altura = max(s[1] for s in com_tinta) - topo + 1
+
+    # Colunas contíguas com tinta → "corridas". Delimitador = corrida estreita cuja
+    # tinta (somando as colunas: a ponta da chave fica deslocada) forma um traço
+    # contínuo de ≥ 75% da altura. Letras empilhadas em duas linhas, como "J"
+    # sobre "J", têm um vão entre elas e não contam.
+    corridas, x = [], 0
+    while x < w:
+        if spans[x] is None:
+            x += 1
+            continue
+        ini = x
+        while x < w and spans[x] is not None:
+            x += 1
+        alto = maior_traco(set().union(*linhas[ini:x])) >= 0.75 * altura
+        corridas.append((ini, x, alto and (x - ini) <= 0.35 * altura))
+        x += 1
+
+    cortes = [c[0] for c in corridas[1:] if c[2]]
+    if not cortes:
+        return [(0, w)]
+    bordas = [0] + cortes + [w]
+    faixas = [(bordas[i], bordas[i + 1]) for i in range(len(bordas) - 1)]
+
+    def multilinha(f):
+        cols = [spans[i] for i in range(f[0], f[1]) if spans[i]]
+        return cols and max(s[1] for s in cols) - min(s[0] for s in cols) + 1 >= 0.75 * altura
+
+    # Um prefixo de uma linha só ("A =") fica junto do bloco seguinte
+    unidas = []
+    for f in faixas:
+        if unidas and not multilinha(unidas[-1]):
+            unidas[-1] = (unidas[-1][0], f[1])
+        else:
+            unidas.append(f)
+    return unidas
+
+
+def _desembrulhar_comando(latex, comando):
+    """Remove \\comando{...} mantendo o conteúdo (respeita chaves aninhadas)."""
+    saida, i, alvo = [], 0, comando + "{"
+    while i < len(latex):
+        if latex.startswith(alvo, i):
+            j, nivel = i + len(alvo), 1
+            while j < len(latex) and nivel:
+                nivel += {"{": 1, "}": -1}.get(latex[j], 0)
+                j += 1
+            saida.append(_desembrulhar_comando(latex[i + len(alvo):j - 1], comando))
+            i = j
+        else:
+            saida.append(latex[i])
+            i += 1
+    return "".join(saida)
+
+
+def latex_valido(latex) -> bool:
+    """Checagem estrutural: {}, \\left/\\right e \\begin/\\end aninhados corretamente
+    (um \\left aberto dentro de um grupo ou ambiente tem de fechar dentro dele)."""
+    pilha = []
+    for m in re.finditer(r"\\(begin|end)\{(\w+\*?)\}|\\(left|right)(?![a-zA-Z])|\\[{}]|[{}]", latex):
+        tok = m.group(0)
+        if m.group(1) == "begin":
+            pilha.append("amb:" + m.group(2))
+        elif m.group(1) == "end":
+            if not pilha or pilha.pop() != "amb:" + m.group(2):
+                return False
+        elif m.group(3) == "left":
+            pilha.append("left")
+        elif m.group(3) == "right":
+            if not pilha or pilha.pop() != "left":
+                return False
+        elif tok == "{":
+            pilha.append("{")
+        elif tok == "}":
+            if not pilha or pilha.pop() != "{":
+                return False
+    return not pilha
+
+
+def ocr_formula(modelo, img):
+    """LaTeX da imagem de uma fórmula, ou None quando o resultado não é confiável
+    (nesse caso a fórmula fica como imagem, que pelo menos está correta)."""
+    img = img.convert("RGB")
+    # Vários blocos lado a lado (ex.: três sistemas, cada um com sua chave): o
+    # pix2tex embaralha as chaves e troca letras — nem recortando cada bloco ou
+    # cada linha o resultado fica aceitável. Melhor manter a imagem.
+    if len(_segmentos_de_formula(img)) > 1:
+        return None
+    latex = (modelo(img) or "").strip()
+    # Fontes sem serifa (Arial) fazem o modelo marcar tudo como negrito
+    latex = _desembrulhar_comando(latex, r"\mathbf")
+    if not latex or not latex_valido(latex):
+        return None
+    # Caixas e campos de formulário viram uma "matriz" de células vazias
+    # (ou de espaços \qquad): sinal de que não era fórmula
+    vazias = re.findall(r"\{+(?:\s|\\q?quad)*\}+", latex)
+    if len(vazias) >= 2 or latex.count(r"\qquad") >= 2:
+        return None
+    return latex
+
+
 def parece_formula(regiao, largura_pagina) -> bool:
     x0, top, x1, bottom = regiao["bbox"]
     corpo = regiao.get("corpo", 10)
@@ -1381,9 +1508,11 @@ def resolver_imagens(documento, regioes, ignorar, pdf, output_path, pasta_imagen
                 # corpo do texto da página em vez de usar uma resolução fixa
                 res = max(90, min(300, 72 * 20 / regiao.get("corpo", 10)))
                 img = pagina.crop(regiao["bbox"], strict=False).to_image(resolution=res).original
-                latex = (modelo_formulas(img) or "").strip()
+                latex = ocr_formula(modelo_formulas, img)
                 if latex:
                     return f"$${latex}$$" if sozinho else f"${latex}$"
+                print(f"[aviso] OCR da fórmula não confiável na imagem {regiao['id']} (pág. {regiao['pagina']}); "
+                      "mantida como imagem", file=sys.stderr)
             except Exception as e:  # noqa: BLE001
                 print(f"[aviso] pix2tex falhou na imagem {regiao['id']}: {e}", file=sys.stderr)
 
