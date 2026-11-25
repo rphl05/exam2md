@@ -55,6 +55,8 @@ python api.py --abrir                            # só o servidor web (porta 800
 | Hifenização | `apli-` + `cado` → `aplicado`; `pé-` + `-rapado` → `pé-rapado` |
 | `R$` | Escapado como `R\$` para não abrir modo matemático |
 | Imagens | Recortadas como PNG reais na posição em que aparecem no texto |
+| Figuras e fórmulas **vetoriais** | Figuras geométricas, gráficos e fórmulas desenhadas com curvas (sem texto selecionável) viram imagem — inline quando estão no meio da frase ou ao lado de "(A)" |
+| Tabelas | Linhas da tabela não são coladas num parágrafo; traços de grade não viram fração |
 | Cabeçalhos/rodapés repetidos | Removidos ("Confidencial até…", "Página 3", nome do concurso) |
 
 As fórmulas usam `$...$` (inline) e `$$...$$` (bloco), compatíveis com KaTeX, MathJax, Obsidian, Typora, Jupyter e GitHub.
@@ -64,7 +66,7 @@ As fórmulas usam `$...$` (inline) e `$$...$$` (bloco), compatíveis com KaTeX, 
 | Modo | Quando usar | Como funciona |
 |---|---|---|
 | Padrão | PDF digital (texto selecionável) | `pdfplumber`: texto, fontes e vetores do PDF. Rápido (~0,5 s/página) |
-| `--hybrid` | Fórmulas inseridas como **imagem** | Padrão + `pix2tex` nas imagens pequenas com cara de fórmula; o LaTeX entra no lugar da imagem. Instale com `pip install pix2tex` (o modelo leva ~40 s para carregar) |
+| `--hybrid` | Fórmulas como **imagem** ou **desenho vetorial** | Padrão + `pix2tex` nas imagens pequenas com cara de fórmula; o LaTeX entra no lugar da imagem (inline ou `$$`). Sem `--hybrid`, essas fórmulas ficam como imagem. Instale com `pip install pix2tex` (o modelo leva ~40 s para carregar); confira o resultado, o OCR erra dígitos às vezes |
 | `--ocr` | PDF **escaneado** | Chama o CLI do [Nougat](https://github.com/facebookresearch/nougat) instalado em `.venv-nougat` (`python install_nougat.py` ou `python exam2md_launcher.py --instalar-ocr`) |
 
 ## Instalação manual
@@ -99,8 +101,8 @@ O servidor escuta só em `127.0.0.1` e apaga conversões com mais de 6 h.
 
 ## Limitações conhecidas
 
-- **Figuras vetoriais** (gráficos desenhados com linhas, não como imagem) não são recortadas — só imagens raster.
 - **Tabelas** saem como texto linha a linha, não como tabela Markdown.
+- Caixas decorativas da capa (campos de formulário com conteúdo) podem sair como imagem.
 - Mais de 2 colunas, ou colunas que voltam a largura total no meio da página, não são detectadas.
 - A imagem é nomeada pela última questão vista antes dela; uma figura compartilhada ("Leia a tira para responder às questões 01 e 02") que venha antes do número recebe o nome da questão anterior.
 - Palavras hifenizadas no fim de uma coluna e continuadas na outra não são reunidas.

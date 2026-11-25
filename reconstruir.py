@@ -58,6 +58,7 @@ OPERADORES_MATH = set("0123456789+−-=·×÷<>≤≥≠±≈∞,./()[]|'′°π
 
 MARCADOR_IMG = "⟦IMG:{}⟧"
 RE_MARCADOR = re.compile(r"^⟦IMG:([^⟧]+)⟧$")
+RE_MARCADOR_INLINE = re.compile(r"⟦IMG:([^⟧]+)⟧")
 
 # Início de bloco que nunca deve ser colado à linha anterior
 RE_INICIO_BLOCO = re.compile(
@@ -273,12 +274,15 @@ def achar_radicais(pagina):
     return radicais
 
 
-def achar_fracoes(pagina, chars):
+def achar_fracoes(pagina, chars, grade=None):
+    grade = grade or Grade(pagina)
     barras = [
         linha for linha in pagina.lines
         if linha["height"] < 1.2
         and 3.0 <= (linha["x1"] - linha["x0"]) <= 45.0
         and (linha.get("linewidth") or 0) >= 0.45
+        # Pedaço de linha de tabela (entre células) não é barra de fração
+        and not grade.contem(linha["x0"], linha["x1"], linha["top"])
     ]
 
     fracoes = []
@@ -324,29 +328,69 @@ def achar_fracoes(pagina, chars):
 
 def achar_tracos(pagina):
     """Traços horizontais finos (lines e rects): sublinhados, lacunas, barras.
-    Ignora os que encostam em traços verticais (bordas de tabela/caixa)."""
-    objetos = list(pagina.lines) + list(pagina.rects)
-    verticais = [
-        (o["x0"], o["top"], o["bottom"]) for o in objetos
-        if o["x1"] - o["x0"] < 1.5 and o["bottom"] - o["top"] >= 3
-    ]
-    # Retângulos com área (caixas, células) também têm bordas verticais
-    verticais += [
-        (x, o["top"], o["bottom"]) for o in pagina.rects
-        if o["x1"] - o["x0"] >= 1.5 and o["bottom"] - o["top"] >= 3
-        for x in (o["x0"], o["x1"])
-    ]
-    tracos = []
-    for obj in objetos:
-        if obj["bottom"] - obj["top"] < 1.5 and obj["x1"] - obj["x0"] >= 3:
-            x0, x1, y = obj["x0"], obj["x1"], obj["top"]
-            em_grade = any(
-                (abs(vx - x0) < 2 or abs(vx - x1) < 2) and vt - 2 <= y <= vb + 2
-                for vx, vt, vb in verticais
-            )
-            if not em_grade:
-                tracos.append((x0, x1, y))
-    return tracos
+    Ignora os que fazem parte de grade (bordas de tabela/caixa)."""
+    grade = Grade(pagina)
+    return [(x0, x1, y) for x0, x1, y in grade.horizontais
+            if x1 - x0 >= 3 and not grade.contem(x0, x1, y)]
+
+
+def _luminancia(cor) -> float:
+    """0 = preto, 1 = branco. Aceita cinza (v), RGB (r, g, b) e CMYK (c, m, y, k)."""
+    if cor is None:
+        return 0.0
+    if isinstance(cor, (int, float)):
+        cor = (cor,)
+    try:
+        cor = tuple(float(v) for v in cor)
+    except (TypeError, ValueError):
+        return 0.0                       # padrão/pattern: trata como escuro
+    if len(cor) == 1:
+        return cor[0]
+    if len(cor) == 3:
+        return sum(cor) / 3
+    if len(cor) == 4:
+        c, m, y, k = cor
+        return (1 - k) * (1 - max(c, m, y))
+    return 0.0
+
+
+def eh_fundo(obj) -> bool:
+    """Preenchimento claro sem contorno: sombreado atrás de texto (caixas do Word,
+    faixas de tabela). Não é estrutura (figura, tabela, sublinhado)."""
+    return bool(obj.get("fill")) and not obj.get("stroke") and _luminancia(obj.get("non_stroking_color")) >= 0.85
+
+
+class Grade:
+    """Segmentos de linhas/retângulos da página, para reconhecer traços que
+    pertencem a tabelas e caixas (e não são fração, sublinhado ou lacuna)."""
+
+    def __init__(self, pagina):
+        objetos = [o for o in list(pagina.lines) + list(pagina.rects) if not eh_fundo(o)]
+        self.verticais = [
+            (o["x0"], o["top"], o["bottom"]) for o in objetos
+            if o["x1"] - o["x0"] < 1.5 and o["bottom"] - o["top"] >= 3
+        ]
+        # Retângulos com área (caixas, células) também têm bordas verticais
+        self.verticais += [
+            (x, o["top"], o["bottom"]) for o in objetos
+            if o.get("object_type") == "rect" and o["x1"] - o["x0"] >= 1.5 and o["bottom"] - o["top"] >= 3
+            for x in (o["x0"], o["x1"])
+        ]
+        self.horizontais = [
+            (o["x0"], o["x1"], o["top"]) for o in objetos if o["bottom"] - o["top"] < 1.5
+        ]
+
+    def contem(self, x0, x1, y) -> bool:
+        # Encosta numa borda vertical
+        if any((abs(vx - x0) < 2 or abs(vx - x1) < 2) and vt - 2 <= y <= vb + 2
+               for vx, vt, vb in self.verticais):
+            return True
+        # Continua em outro traço na mesma altura (linha de tabela feita de pedaços)
+        return any(
+            abs(hy - y) < 0.8 and hx1 - hx0 >= 3 and (abs(hx0 - x1) < 2 or abs(hx1 - x0) < 2)
+            and not (abs(hx0 - x0) < 0.5 and abs(hx1 - x1) < 0.5)
+            for hx0, hx1, hy in self.horizontais
+        )
 
 
 def marcar_sublinhados_e_lacunas(tracos, chars, corpo, fracoes, largura_pagina):
@@ -442,6 +486,14 @@ def renderizar_tokens(tokens, corpo, base=None, tamanho=None, topo=False):
             fechar()
             espaco_antes(token["x0"])
             pecas.append((f"\\sqrt{{{token['radicando']}}}", "math", None))
+            anterior = token
+            continue
+
+        if token.get("marcador"):
+            fechar()
+            espaco()
+            pecas.append((MARCADOR_IMG.format(token["marcador"]), "img", None))
+            pecas.append((" ", "esp", None))
             anterior = token
             continue
 
@@ -570,6 +622,8 @@ def montar_linha(pecas) -> str:
             itens.append((" ", "esp"))
         elif tipo == "lac":
             itens.append((texto.replace("_", "\\_"), None))
+        elif tipo == "img":
+            itens.append((texto, None))
         else:
             estilo = estilo if estilo and any(estilo) else None
             itens.append((_escapar_markdown(texto), estilo))
@@ -615,27 +669,61 @@ def montar_linha(pecas) -> str:
 
 
 def _desembrulhar_rotulo(linha: str) -> str:
-    """Tira o número da questão/letra da alternativa de dentro do negrito:
-    '**01.**' -> '01.' ; '**01. Texto**' -> '01. **Texto**'."""
+    """Tira o número da questão/letra da alternativa de dentro da formatação, para
+    que as regras de questão/alternativa o reconheçam:
+    '**01.**' -> '01.' ; '<u>**68**</u>' -> '68' ; '**01. Texto**' -> '01. **Texto**'."""
     rotulo = r"(\(?[A-Ea-e]\)|\d{1,3}\s?(?:\.|\)|–|-)?)"
-    m = re.match(r"^(\*{1,3})" + rotulo + r"\1(\s|$)", linha)
-    if m:
-        return m.group(2) + m.group(3) + linha[m.end():]
-    m = re.match(r"^(\*{1,3})" + rotulo + r"\s+(?=\S)", linha)
-    if m:
-        return f"{m.group(2)} {m.group(1)}" + linha[m.end():]
+    m = re.match(r"^(<u>)?(\*{1,3})?" + rotulo + r"(\*{1,3})?(</u>)?(\s|$)", linha)
+    if m and (m.group(1) or m.group(2)) and m.group(2) == m.group(4) \
+            and bool(m.group(1)) == bool(m.group(5)):
+        return m.group(3) + m.group(6) + linha[m.end():]
+    m = re.match(r"^(<u>)?(\*{1,3})?" + rotulo + r"\s+(?=\S)", linha)
+    if m and (m.group(1) or m.group(2)):
+        return f"{m.group(3)} {m.group(1) or ''}{m.group(2) or ''}" + linha[m.end():]
     return linha
 
 
 # ---------------------------------------------------------------------------
 # Coluna -> linhas
 # ---------------------------------------------------------------------------
-def renderizar_coluna(chars, corpo, fracoes, radicais, lacunas=()):
-    """Retorna lista de dicts {texto, top, x0, x1, w_primeira} (uma por linha visual)."""
+def renderizar_coluna(chars, corpo, fracoes, radicais, lacunas=(), imagens=()):
+    """Retorna (linhas, ids_hospedados).
+
+    linhas: dicts {texto, top, x0, x1, w_primeira}, uma por linha visual.
+    ids_hospedados: imagens baixas que ficam no meio de uma linha de texto (fórmula
+    no meio da frase, fórmula ao lado de "(A)") e entram inline nessa linha.
+    """
     linhas = agrupar_linhas(chars, corpo)
 
     consumidos = set()
     extras = {}
+    hospedadas = set()
+
+    for img in imagens:
+        x0, top, x1, bottom = img["bbox"]
+        if bottom - top > 5 * corpo:
+            continue
+        cy = (top + bottom) / 2
+        melhor = None
+        for indice, (_a, itens) in enumerate(linhas):
+            t = min(c["top"] for c in itens)
+            b = max(c["bottom"] for c in itens)
+            # A linha de texto cruza a imagem (rótulo pode estar alinhado ao topo,
+            # ao centro ou à base dela)
+            if min(b, bottom) - max(t, top) < 0.5 * (b - t):
+                continue
+            texto_ao_lado = any(
+                (c["x1"] <= x0 + 2 and x0 - c["x1"] < 4 * corpo)
+                or (c["x0"] >= x1 - 2 and c["x0"] - x1 < 4 * corpo)
+                for c in itens if c["text"].strip()
+            )
+            if texto_ao_lado:
+                d = abs((t + b) / 2 - cy)
+                if melhor is None or d < melhor[1]:
+                    melhor = (indice, d)
+        if melhor is not None:
+            extras.setdefault(melhor[0], []).append({"x0": x0, "x1": x1, "marcador": img["id"]})
+            hospedadas.add(img["id"])
 
     for lacuna in lacunas:
         candidatas = [
@@ -725,7 +813,7 @@ def renderizar_coluna(chars, corpo, fracoes, radicais, lacunas=()):
                 "x1": max(t["x1"] for t in tokens),
                 "w_primeira": largura_primeira_palavra(itens, corpo),
             })
-    return resultado
+    return resultado, hospedadas
 
 
 def largura_primeira_palavra(chars, corpo) -> float:
@@ -762,6 +850,7 @@ def juntar_paragrafos(linhas, corpo, borda_direita, largura):
         continua = (
             saida and anterior is not None
             and largura > 12 * corpo
+            and not linha.get("tabela") and not anterior.get("tabela")   # linhas de tabela
             # a 1ª palavra desta linha não caberia no fim da anterior
             and anterior["x1"] + 0.25 * corpo + linha.get("w_primeira", 0) > borda_direita - 1.0 * corpo
             and not RE_INICIO_BLOCO.match(texto)
@@ -868,11 +957,11 @@ def pos_processar_prova(texto: str) -> str:
 # ---------------------------------------------------------------------------
 # Imagens
 # ---------------------------------------------------------------------------
-def coletar_regioes_imagem(pagina) -> List[dict]:
-    """Caixas das imagens da página (sem marcas d'água/fundos), mescladas quando
-    se sobrepõem (figuras fatiadas em vários pedaços)."""
+def coletar_regioes_imagem(pagina, extras=()) -> List[dict]:
+    """Caixas das imagens raster da página (sem marcas d'água/fundos) somadas às
+    caixas extras (figuras vetoriais), mescladas quando se sobrepõem."""
     W, H = pagina.width, pagina.height
-    caixas = []
+    caixas = [list(c) for c in extras]
     for img in pagina.images:
         x0, top = max(0.0, img["x0"]), max(0.0, img["top"])
         x1, bottom = min(W, img["x1"]), min(H, img["bottom"])
@@ -900,6 +989,142 @@ def coletar_regioes_imagem(pagina) -> List[dict]:
                 break
 
     return [{"bbox": tuple(c), "top": c[1]} for c in sorted(caixas, key=lambda c: (c[1], c[0]))]
+
+
+def coletar_regioes_vetoriais(pagina, chars, corpo, radicais):
+    """Figuras e fórmulas desenhadas com vetores (curvas/linhas) em vez de texto ou
+    imagem raster: figuras geométricas, gráficos, fórmulas com fonte convertida
+    em contorno.
+
+    Retorna (figuras, tabelas), listas de caixas (x0, top, x1, bottom).
+    - figuras: viram imagens (recortadas da página) no lugar em que aparecem;
+    - tabelas: agrupamentos com muito texto dentro (tabelas, caixas de texto),
+      usados só para não colar as linhas delas num parágrafo.
+    Marca ch['na_figura'] nos rótulos da figura (letras dos vértices etc.).
+    """
+    W, H = pagina.width, pagina.height
+    gx, gy = 0.4 * corpo, 0.15 * corpo   # glifos ficam lado a lado; linhas, empilhadas
+
+    def eh_radical(o):
+        return any(abs(o["x0"] - r["x0"]) < 1.0 and abs(o["bottom"] - 1.5 - r["y"]) < 1.0 for r in radicais)
+
+    objetos = []  # (obj, forte)
+    for o in list(pagina.curves) + list(pagina.rects) + list(pagina.lines):
+        w, h = o["x1"] - o["x0"], o["bottom"] - o["top"]
+        if w > 0.8 * W or h > 0.4 * H:        # moldura, divisória de colunas
+            continue
+        if o.get("object_type") == "curve" and eh_radical(o):
+            continue
+        if eh_fundo(o):                       # sombreado atrás do texto
+            continue
+        objetos.append((o, h >= 1.5))         # traço horizontal fino = só "ponte"
+    if not objetos:
+        return [], []
+
+    # União por proximidade, com grade espacial para não ser O(n²)
+    pai = list(range(len(objetos)))
+
+    def raiz(i):
+        while pai[i] != i:
+            pai[i] = pai[pai[i]]
+            i = pai[i]
+        return i
+
+    # Barra de fração fica a ~0,3 corpo do numerador e do denominador: traços
+    # finos ligam com folga vertical maior (senão a fração perde o denominador)
+    gy_ponte = 0.45 * corpo
+    T = 24.0
+    celulas = collections.defaultdict(list)
+    for i, (o, forte_i) in enumerate(objetos):
+        for cx in range(int((o["x0"] - gx) // T), int((o["x1"] + gx) // T) + 1):
+            for cy in range(int((o["top"] - gy_ponte) // T), int((o["bottom"] + gy_ponte) // T) + 1):
+                for j in celulas[(cx, cy)]:
+                    a, forte_j = objetos[j]
+                    g = gy if (forte_i and forte_j) else gy_ponte
+                    if (o["x0"] - gx <= a["x1"] and a["x0"] - gx <= o["x1"]
+                            and o["top"] - g <= a["bottom"] and a["top"] - g <= o["bottom"]):
+                        ri, rj = raiz(i), raiz(j)
+                        if ri != rj:
+                            pai[ri] = rj
+                celulas[(cx, cy)].append(i)
+
+    grupos = collections.defaultdict(list)
+    for i in range(len(objetos)):
+        grupos[raiz(i)].append(objetos[i])
+
+    visiveis = [c for c in chars if c["text"].strip()]
+    por_linha = collections.defaultdict(list)
+    for c in visiveis:
+        por_linha[round(c["top"])].append(c)
+
+    def centro(c):
+        return (c["x0"] + c["x1"]) / 2, (c["top"] + c["bottom"]) / 2
+
+    figuras, tabelas = [], []
+    for membros in grupos.values():
+        fortes = [o for o, f in membros if f]
+        if not fortes:
+            continue                          # só sublinhados/barras soltas
+        x0 = min(o["x0"] for o, _f in membros)
+        y0 = min(o["top"] for o, _f in membros)
+        x1 = max(o["x1"] for o, _f in membros)
+        y1 = max(o["bottom"] for o, _f in membros)
+        w, h = x1 - x0, y1 - y0
+        if w < 0.8 * corpo or h < 0.8 * corpo or max(w, h) < 1.5 * corpo:
+            continue                          # marcador de lista, ícone minúsculo
+        if w * h > 0.6 * W * H:
+            continue
+
+        dentro = [c for c in visiveis
+                  if x0 - 1 <= centro(c)[0] <= x1 + 1 and y0 - 1 <= centro(c)[1] <= y1 + 1]
+        area_texto = sum((c["x1"] - c["x0"]) * (c["bottom"] - c["top"]) for c in dentro)
+        def interno(o):
+            """Divisão interna de verdade (linha/coluna de tabela), não um
+            retângulo degenerado num canto da moldura."""
+            tamanho = max(o["x1"] - o["x0"], o["bottom"] - o["top"])
+            return tamanho >= 2 * corpo and (
+                (o["top"] > y0 + 3 and o["bottom"] < y1 - 3)
+                or (o["x0"] > x0 + 3 and o["x1"] < x1 - 3))
+
+        if len(dentro) > 8 and area_texto > 0.12 * w * h:
+            # Com divisões internas é tabela (linhas não se juntam); só com a
+            # moldura é caixa de texto (parágrafos se juntam normalmente)
+            if any(interno(o) for o, _f in membros):
+                tabelas.append((x0, y0, x1, y1))
+            continue
+        # Moldura vazia e alongada: campo de formulário ("RG", "Inscrição"). O
+        # rótulo costuma ficar sobre a borda, então não conta como conteúdo.
+        conteudo = [c for c in dentro
+                    if y0 + 0.8 * corpo < centro(c)[1] < y1 - 0.8 * corpo]
+        if not conteudo and (w > 2.5 * h or h > 2.5 * w) and not any(interno(o) for o, _f in membros):
+            continue
+        # Só retângulos e linhas horizontais/verticais (sem curvas nem diagonais)
+        so_retas = all(
+            o.get("object_type") != "curve"
+            and (o.get("object_type") == "rect" or o["x1"] - o["x0"] < 1.5 or o["bottom"] - o["top"] < 1.5)
+            for o, _f in membros
+        )
+        if dentro and so_retas and len(membros) <= 6:
+            continue                          # moldura em volta de texto (ex.: nº da questão)
+
+        # Rótulos: caracteres em volta cuja linha inteira está na área da figura
+        m = 0.6 * corpo
+        ex0, ey0, ex1, ey1 = x0 - m, y0 - m, x1 + m, y1 + m
+        rotulos = []
+        for c in visiveis:
+            cx, cy = centro(c)
+            if not (ex0 <= cx <= ex1 and ey0 <= cy <= ey1):
+                continue
+            vizinhos = [d for k in (round(c["top"]) - 1, round(c["top"]), round(c["top"]) + 1)
+                        for d in por_linha.get(k, []) if abs(d["top"] - c["top"]) < 2]
+            if all(ex0 <= centro(d)[0] <= ex1 for d in vizinhos):
+                rotulos.append(c)
+        for c in rotulos:
+            c["na_figura"] = True
+            x0, y0 = min(x0, c["x0"]), min(y0, c["top"])
+            x1, y1 = max(x1, c["x1"]), max(y1, c["bottom"])
+        figuras.append((max(0.0, x0 - 1.5), max(0.0, y0 - 1.5), min(W, x1 + 1.5), min(H, y1 + 1.5)))
+    return figuras, tabelas
 
 
 def _chave_imagem(regiao):
@@ -943,18 +1168,21 @@ def processar_pagina(pagina, pasta_imagens: Optional[Path] = None):
         novo["estilo"] = estilo_fonte(ch.get("fontname"))
         chars.append(novo)
 
-    regioes = coletar_regioes_imagem(pagina)
+    corpo = tamanho_corpo(chars) if chars else 10.0
+    todos_radicais = achar_radicais(pagina)
+    figuras, tabelas = coletar_regioes_vetoriais(pagina, chars, corpo, todos_radicais)
+    chars = [c for c in chars if not c.get("na_figura")]   # rótulos vão na imagem
+
+    regioes = coletar_regioes_imagem(pagina, figuras)
     for k, r in enumerate(regioes, 1):
         r["id"] = f"{pagina.page_number}-{k}"
         r["pagina"] = pagina.page_number
+        r["corpo"] = corpo
 
     if not chars:
         texto = "\n".join(MARCADOR_IMG.format(r["id"]) for r in regioes)
         return texto, regioes
 
-    corpo = tamanho_corpo(chars)
-    for r in regioes:
-        r["corpo"] = corpo
     divisoria = achar_divisoria(pagina, chars, corpo)
     # Margem direita: a observada ou, se nenhuma linha chega lá (página só com
     # versos/listas), a simétrica da margem esquerda
@@ -1004,23 +1232,34 @@ def processar_pagina(pagina, pasta_imagens: Optional[Path] = None):
         x0, top, x1, _b = r["bbox"]
         imgs_por_bloco[bloco_de((x0 + x1) / 2 if x1 - x0 < 0.6 * W else x0 + 1, top)].append(r)
 
-    todos_radicais = achar_radicais(pagina)
-    todos_tracos = achar_tracos(pagina)
+    grade = Grade(pagina)
+    # Traços dentro de figuras (linhas de um ícone, eixos) não são lacuna/sublinhado
+    todos_tracos = [
+        t for t in achar_tracos(pagina)
+        if not any(f[0] - 1 <= t[0] and t[1] <= f[2] + 1 and f[1] - 1 <= t[2] <= f[3] + 1 for f in figuras)
+    ]
     saida = []
     for idx, (bloco, (bx0, bx1, by0, by1), borda) in enumerate(blocos):
         imgs = imgs_por_bloco.get(idx, [])
         if not bloco and not imgs:
             continue
-        linhas = []
+        linhas, hospedadas = [], set()
         if bloco:
-            fracoes = achar_fracoes(pagina, bloco)
+            fracoes = achar_fracoes(pagina, bloco, grade)
             radicais = [r for r in todos_radicais if bloco_de(r["x0"], r["y"]) == idx]
             tracos = [t for t in todos_tracos if bloco_de((t[0] + t[1]) / 2, t[2]) == idx]
             lacunas = marcar_sublinhados_e_lacunas(tracos, bloco, corpo, fracoes, W)
-            linhas = renderizar_coluna(bloco, corpo, fracoes, radicais, lacunas)
+            linhas, hospedadas = renderizar_coluna(bloco, corpo, fracoes, radicais, lacunas, imgs)
         for r in imgs:
-            linhas.append({"texto": MARCADOR_IMG.format(r["id"]), "top": r["top"], "img": True})
+            if r["id"] not in hospedadas:
+                # Imagem que começa na mesma altura de uma linha vem depois dela
+                # (ex.: "(C)" alinhado ao topo de uma figura alta)
+                linhas.append({"texto": MARCADOR_IMG.format(r["id"]), "top": r["top"] + 0.6 * corpo, "img": True})
         linhas.sort(key=lambda l: l["top"])
+        for l in linhas:
+            if not l.get("img"):
+                cx, cy = (l["x0"] + l["x1"]) / 2, l["top"] + 0.5 * corpo
+                l["tabela"] = any(t[0] <= cx <= t[2] and t[1] <= cy <= t[3] for t in tabelas)
 
         esquerda_bloco = min((l["x0"] for l in linhas if not l.get("img")), default=bx0)
         textos = juntar_paragrafos(linhas, corpo, borda, borda - esquerda_bloco)
@@ -1127,47 +1366,29 @@ def resolver_imagens(documento, regioes, ignorar, pdf, output_path, pasta_imagen
     usados = collections.Counter()
     questao = None
     alternativa = None
-    pagina_atual = None
     saida = []
 
-    for linha in documento.split("\n"):
-        m_pag = re.match(r"^<!-- pagina (\d+) -->$", linha)
-        if m_pag:
-            pagina_atual = int(m_pag.group(1))
-            saida.append(linha)
-            continue
-
-        m = RE_MARCADOR.match(linha.strip())
-        if not m:
-            texto = linha.strip()
-            mq = RE_QUESTAO.match(texto)
-            if mq and not RE_ALTERNATIVA.match(texto):
-                q = int(mq.group(1))
-                if questao is None or q > questao or q == 1:
-                    questao, alternativa = q, None
-            ma = RE_ALTERNATIVA.match(texto)
-            if texto:
-                alternativa = ma.group(1).upper() if ma and questao is not None else None
-            saida.append(linha)
-            continue
-
-        regiao = regioes.get(m.group(1))
+    def gerar(id_regiao, sozinho):
+        """Markdown que substitui um marcador ('' se a imagem for descartada)."""
+        regiao = regioes.get(id_regiao)
         if regiao is None or regiao["id"] in ignorar:
-            continue
+            return ""
         pagina = pdf.pages[regiao["indice_pagina"]]
 
         if modelo_formulas is not None and parece_formula(regiao, pagina.width):
             try:
-                img = pagina.crop(regiao["bbox"], strict=False).to_image(resolution=300).original
+                # pix2tex acerta mais com letras de ~20 px de altura: escala pelo
+                # corpo do texto da página em vez de usar uma resolução fixa
+                res = max(90, min(300, 72 * 20 / regiao.get("corpo", 10)))
+                img = pagina.crop(regiao["bbox"], strict=False).to_image(resolution=res).original
                 latex = (modelo_formulas(img) or "").strip()
                 if latex:
-                    saida.append(f"$${latex}$$")
-                    continue
+                    return f"$${latex}$$" if sozinho else f"${latex}$"
             except Exception as e:  # noqa: BLE001
                 print(f"[aviso] pix2tex falhou na imagem {regiao['id']}: {e}", file=sys.stderr)
 
         if pasta_imagens is None:
-            continue
+            return ""
 
         if questao is not None:
             base = f"{stem}_q{questao:02d}" + (f"_alt{alternativa}" if alternativa else "")
@@ -1184,10 +1405,9 @@ def resolver_imagens(documento, regioes, ignorar, pdf, output_path, pasta_imagen
             pagina.crop(regiao["bbox"], strict=False).to_image(resolution=resolucao).save(caminho, format="PNG")
         except Exception as e:  # noqa: BLE001
             print(f"[aviso] falha ao salvar {nome}: {e}", file=sys.stderr)
-            continue
+            return ""
 
         rel = Path(os.path.relpath(caminho, output_path.parent)).as_posix()
-        saida.append(f"![{legenda} – figura {usados[base]}]({rel})")
         x0, top, x1, bottom = regiao["bbox"]
         manifesto.append({
             "arquivo": nome,
@@ -1195,9 +1415,36 @@ def resolver_imagens(documento, regioes, ignorar, pdf, output_path, pasta_imagen
             "pagina": regiao["pagina"],
             "questao": questao,
             "alternativa": alternativa,
+            "inline": not sozinho,
             "x": round(x0, 1), "y": round(top, 1),
             "largura": round(x1 - x0, 1), "altura": round(bottom - top, 1),
         })
+        return f"![{legenda} – figura {usados[base]}]({rel})"
+
+    for linha in documento.split("\n"):
+        if re.match(r"^<!-- pagina (\d+) -->$", linha):
+            saida.append(linha)
+            continue
+
+        # Atualiza questão/alternativa pelo texto da linha (sem os marcadores)
+        texto = RE_MARCADOR_INLINE.sub("", linha).strip()
+        if texto:
+            mq = RE_QUESTAO.match(texto)
+            ma = RE_ALTERNATIVA.match(texto)
+            if mq and not ma:
+                q = int(mq.group(1))
+                if questao is None or q > questao or q == 1:
+                    questao, alternativa = q, None
+            alternativa = ma.group(1).upper() if ma and questao is not None else None
+
+        if "⟦IMG:" not in linha:
+            saida.append(linha)
+            continue
+        sozinho = not texto
+        nova = RE_MARCADOR_INLINE.sub(lambda m: gerar(m.group(1), sozinho), linha)
+        nova = re.sub(r" {2,}", " ", nova).strip()
+        if nova:
+            saida.append(nova)
 
     return "\n".join(saida), manifesto
 
